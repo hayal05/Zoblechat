@@ -12,6 +12,12 @@
         <p class="auth-subheading">Pick a username, set a password, start chatting.</p>
 
         <form id="registerForm" class="auth-form" novalidate>
+            <label class="field-label" for="fullName">Name</label>
+            <input class="field-input" type="text" id="fullName" name="full_name" autocomplete="name" maxlength="60" required>
+
+            <label class="field-label" for="email">Email</label>
+            <input class="field-input" type="email" id="email" name="email" autocomplete="email" required>
+
             <label class="field-label" for="username">Username</label>
             <input class="field-input" type="text" id="username" name="username" autocomplete="username" required>
 
@@ -35,6 +41,8 @@
         errorEl.hidden = true;
 
         const payload = {
+            full_name: document.getElementById("fullName").value.trim(),
+            email: document.getElementById("email").value.trim(),
             username: document.getElementById("username").value.trim(),
             password: document.getElementById("password").value,
         };

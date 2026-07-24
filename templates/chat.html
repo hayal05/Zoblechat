@@ -21,17 +21,32 @@
             </span>
         </div>
 
+        <div class="search-box">
+            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="userSearchInput" class="search-input" placeholder="Search people by name…" autocomplete="off">
+            <button class="search-clear" id="userSearchClear" type="button" title="Clear search" hidden>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+        </div>
+
         <div class="chat-list" id="chatList">
             {% if users %}
                 {% for user in users %}
-                <button class="chat-row" data-user-id="{{ user.id }}" data-username="{{ user.username }}">
-                    <span class="avatar">
-                        <img src="{{ url_for('static', filename='uploads/' ~ user.profile_pic) }}" alt="{{ user.username }}'s avatar">
+                <button class="chat-row" data-user-id="{{ user.id }}" data-username="{{ user.username }}" data-fullname="{{ user.full_name }}" data-profile-pic="{{ user.profile_pic }}">
+                    <span class="avatar" data-online="{{ 'true' if user.online else 'false' }}">
+                        <img src="{{ url_for('static', filename='uploads/' ~ user.profile_pic) }}" alt="{{ user.full_name }}'s avatar">
+                        <span class="presence-dot"></span>
                     </span>
 
                     <span class="chat-row-body">
                         <span class="chat-row-top">
-                            <span class="chat-row-name">{{ user.username }}</span>
+                            <span class="chat-row-name">{{ user.full_name }}</span>
                         </span>
                         <span class="chat-row-preview" data-default="Tap to open conversation">Tap to open conversation</span>
                     </span>
@@ -42,15 +57,21 @@
                 </button>
                 {% endfor %}
             {% else %}
-                <p class="chat-list-empty">No other users yet. Once someone else registers, they'll show up here.</p>
+                <p class="chat-list-empty">No conversations yet. Use the search box above to find someone and say hello.</p>
             {% endif %}
         </div>
 
+        <div class="chat-list search-results" id="searchResults" hidden>
+            <!-- Populated by JS while the user is searching -->
+        </div>
+
         <div class="sidebar-footer">
-            <span class="avatar avatar-sm">
-                <img src="{{ url_for('static', filename='uploads/' ~ current_user_data.profile_pic) }}" alt="Your avatar">
-            </span>
-            <span class="sidebar-footer-name">{{ current_user_data.username }}</span>
+            <button class="sidebar-footer-identity" id="openProfileBtn" type="button" title="Edit your profile">
+                <span class="avatar avatar-sm" id="ownAvatarWrap">
+                    <img id="ownAvatar" src="{{ url_for('static', filename='uploads/' ~ current_user_data.profile_pic) }}" alt="Your avatar">
+                </span>
+                <span class="sidebar-footer-name" id="ownFullName">{{ current_user_data.full_name }}</span>
+            </button>
             <button class="btn-icon" id="logoutBtn" title="Log out" type="button">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
@@ -60,6 +81,40 @@
             </button>
         </div>
     </aside>
+
+    <!-- ============ PROFILE MODAL ============ -->
+    <div class="modal-backdrop" id="profileModalBackdrop" hidden>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="profileModalTitle">
+            <div class="modal-header">
+                <h2 id="profileModalTitle">Edit profile</h2>
+                <button class="btn-icon" id="closeProfileBtn" title="Close" type="button">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="modal-body">
+                <div class="profile-avatar-picker">
+                    <span class="avatar avatar-lg" id="profileAvatarWrap">
+                        <img id="profileAvatarPreview" src="{{ url_for('static', filename='uploads/' ~ current_user_data.profile_pic) }}" alt="Your avatar">
+                    </span>
+                    <label class="btn btn-secondary" for="profilePicInput">Change photo</label>
+                    <input type="file" id="profilePicInput" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+                    <p class="field-hint">PNG, JPG, GIF, or WEBP. Max 5&nbsp;MB.</p>
+                </div>
+
+                <label class="field-label" for="profileFullName">Name</label>
+                <input class="field-input" type="text" id="profileFullName" maxlength="60" value="{{ current_user_data.full_name }}">
+
+                <p class="field-error" id="profileError" hidden></p>
+                <p class="field-success" id="profileSuccess" hidden></p>
+
+                <button class="btn btn-primary btn-block" id="saveProfileBtn" type="button">Save changes</button>
+            </div>
+        </div>
+    </div>
 
     <!-- ============ MAIN CHAT PANE ============ -->
     <main class="chat-pane">
@@ -82,8 +137,12 @@
                 </button>
                 <span class="avatar" id="activeAvatarWrap">
                     <img id="activeAvatar" src="" alt="">
+                    <span class="presence-dot"></span>
                 </span>
-                <span class="chat-header-name" id="activeUsername"></span>
+                <span class="chat-header-identity">
+                    <span class="chat-header-name" id="activeUsername"></span>
+                    <span class="chat-header-status" id="activeStatus">—</span>
+                </span>
             </header>
 
             <div class="messages-scroll" id="messagesScroll">
@@ -118,6 +177,29 @@
 
     let activeUserId = null;
     let activeUsername = null;
+
+    // Caches everything we know about a user (name, avatar, presence) keyed
+    // by id — seeded from the server-rendered conversation list, then grown
+    // as search results and presence updates come in. Lets us render a chat
+    // row / header for someone found via search without another round trip.
+    const knownUsers = {};
+    chatList.querySelectorAll(".chat-row").forEach((row) => {
+        const id = parseInt(row.dataset.userId, 10);
+        const avatarEl = row.querySelector(".avatar");
+        knownUsers[id] = {
+            id,
+            username: row.dataset.username,
+            full_name: row.dataset.fullname,
+            profile_pic: row.dataset.profilePic,
+            online: avatarEl ? avatarEl.dataset.online === "true" : false,
+            last_seen: null,
+        };
+    });
+
+    const searchInput = document.getElementById("userSearchInput");
+    const searchClearBtn = document.getElementById("userSearchClear");
+    const searchResults = document.getElementById("searchResults");
+    let searchDebounceTimer = null;
 
     // ---------------------------------------------------------------
     // Helpers
@@ -156,11 +238,87 @@
         messagesScroll.appendChild(row);
     }
 
+    function buildChatRow(user) {
+        const row = document.createElement("button");
+        row.className = "chat-row";
+        row.dataset.userId = user.id;
+        row.dataset.username = user.username;
+        row.dataset.fullname = user.full_name;
+        row.dataset.profilePic = user.profile_pic;
+        row.innerHTML = `
+            <span class="avatar" data-online="${user.online ? "true" : "false"}">
+                <img src="/static/uploads/${user.profile_pic}" alt="${escapeHtml(user.full_name)}'s avatar">
+                <span class="presence-dot"></span>
+            </span>
+            <span class="chat-row-body">
+                <span class="chat-row-top">
+                    <span class="chat-row-name">${escapeHtml(user.full_name)}</span>
+                </span>
+                <span class="chat-row-preview" data-default="Tap to open conversation">Tap to open conversation</span>
+            </span>`;
+        return row;
+    }
+
+    // A conversation only ever shows up in the sidebar once a message has
+    // actually been sent — this is what makes that happen the first time,
+    // for a chat started via the search box. On every later message it just
+    // finds the existing row instead of creating a new one.
+    function ensureChatRow(userId) {
+        let row = chatList.querySelector(`.chat-row[data-user-id="${userId}"]`);
+        if (row) return row;
+
+        const user = knownUsers[userId];
+        if (!user) return null;
+
+        const placeholder = chatList.querySelector(".chat-list-empty");
+        if (placeholder) placeholder.remove();
+
+        row = buildChatRow(user);
+        chatList.prepend(row);
+        if (userId === activeUserId) row.classList.add("active");
+        return row;
+    }
+
     function setRowPreview(userId, text) {
-        const row = chatList.querySelector(`.chat-row[data-user-id="${userId}"]`);
+        const row = ensureChatRow(userId);
         if (!row) return;
+        if (chatList.firstElementChild !== row) chatList.prepend(row); // bump to top, most-recent-first
         const preview = row.querySelector(".chat-row-preview");
         preview.textContent = text;
+    }
+
+    // ---------------------------------------------------------------
+    // Presence ("last seen" / online)
+    // ---------------------------------------------------------------
+    function formatLastSeen(iso) {
+        if (!iso) return "Offline";
+        const diffMs = Date.now() - new Date(iso).getTime();
+        const mins = Math.round(diffMs / 60000);
+        if (mins < 1) return "Last seen just now";
+        if (mins < 60) return `Last seen ${mins}m ago`;
+        const hours = Math.round(mins / 60);
+        if (hours < 24) return `Last seen ${hours}h ago`;
+        const days = Math.round(hours / 24);
+        if (days < 7) return `Last seen ${days}d ago`;
+        return `Last seen ${new Date(iso).toLocaleDateString()}`;
+    }
+
+    function setActiveStatus(online, lastSeen) {
+        const statusEl = document.getElementById("activeStatus");
+        statusEl.textContent = online ? "Online" : formatLastSeen(lastSeen);
+        statusEl.dataset.state = online ? "online" : "offline";
+        document.getElementById("activeAvatarWrap").dataset.online = online ? "true" : "false";
+    }
+
+    function updatePresenceEverywhere(userId, online, lastSeen) {
+        if (knownUsers[userId]) {
+            knownUsers[userId].online = online;
+            knownUsers[userId].last_seen = lastSeen;
+        }
+        document.querySelectorAll(`.chat-row[data-user-id="${userId}"] .avatar`).forEach((av) => {
+            av.dataset.online = online ? "true" : "false";
+        });
+        if (userId === activeUserId) setActiveStatus(online, lastSeen);
     }
 
     function bumpUnreadBadge(userId) {
@@ -184,18 +342,25 @@
     // ---------------------------------------------------------------
     // Conversation open / navigation
     // ---------------------------------------------------------------
-    async function openConversation(row) {
+    function applyActiveHeader(user) {
+        document.getElementById("activeUsername").textContent = user.full_name || user.username;
+        document.getElementById("activeAvatar").src = `/static/uploads/${user.profile_pic}`;
+        setActiveStatus(!!user.online, user.last_seen || null);
+    }
+
+    async function openConversationForId(userId) {
         document.querySelectorAll(".chat-row.active").forEach(r => r.classList.remove("active"));
-        row.classList.add("active");
+        const row = chatList.querySelector(`.chat-row[data-user-id="${userId}"]`);
+        if (row) {
+            row.classList.add("active");
+            const badge = row.querySelector(".unread-badge");
+            if (badge) badge.remove();
+        }
 
-        const badge = row.querySelector(".unread-badge");
-        if (badge) badge.remove();
-
-        activeUserId = parseInt(row.dataset.userId, 10);
-        activeUsername = row.dataset.username;
-
-        document.getElementById("activeUsername").textContent = activeUsername;
-        document.getElementById("activeAvatar").src = row.querySelector("img").src;
+        activeUserId = userId;
+        const cached = knownUsers[userId];
+        activeUsername = cached ? cached.username : null;
+        if (cached) applyActiveHeader(cached);
 
         emptyState.hidden = true;
         activeState.hidden = false;
@@ -205,14 +370,28 @@
         messageInput.value = "";
         messageInput.style.height = "";
 
+        // Refresh presence + profile info in case it's changed since we last cached it.
         try {
-            const res = await fetch(`/api/messages/${activeUserId}`);
+            const presRes = await fetch(`/api/users/${userId}`);
+            if (presRes.ok) {
+                const presData = await presRes.json();
+                knownUsers[userId] = { ...(knownUsers[userId] || {}), ...presData.user };
+                activeUsername = knownUsers[userId].username;
+                if (activeUserId === userId) applyActiveHeader(knownUsers[userId]);
+            }
+        } catch (err) { /* keep showing cached info */ }
+
+        try {
+            const res = await fetch(`/api/messages/${userId}`);
             if (!res.ok) throw new Error("Failed to load conversation");
             const data = await res.json();
+            if (activeUserId !== userId) return; // user switched chats while this was loading
             data.messages.forEach(msg => appendMessage(msg, false));
             scrollMessagesToBottom(false);
         } catch (err) {
-            messagesScroll.innerHTML = `<p class="chat-list-empty">Couldn't load this conversation. Check your connection and try again.</p>`;
+            if (activeUserId === userId) {
+                messagesScroll.innerHTML = `<p class="chat-list-empty">Couldn't load this conversation. Check your connection and try again.</p>`;
+            }
         }
 
         messageInput.focus();
@@ -221,7 +400,76 @@
     chatList.addEventListener("click", (e) => {
         const row = e.target.closest(".chat-row");
         if (!row) return;
-        openConversation(row);
+        openConversationForId(parseInt(row.dataset.userId, 10));
+    });
+
+    // ---------------------------------------------------------------
+    // Search — the only way to find someone you haven't messaged yet
+    // ---------------------------------------------------------------
+    function showSearchResults() {
+        chatList.hidden = true;
+        searchResults.hidden = false;
+    }
+
+    function showConversationList() {
+        searchResults.hidden = true;
+        chatList.hidden = false;
+    }
+
+    function renderSearchResults(users) {
+        if (!users.length) {
+            searchResults.innerHTML = `<p class="chat-list-empty">No matching users found.</p>`;
+            showSearchResults();
+            return;
+        }
+        searchResults.innerHTML = "";
+        users.forEach((u) => {
+            knownUsers[u.id] = { ...(knownUsers[u.id] || {}), ...u };
+            const row = buildChatRow(knownUsers[u.id]);
+            row.querySelector(".chat-row-preview").textContent = `@${u.username}`;
+            searchResults.appendChild(row);
+        });
+        showSearchResults();
+    }
+
+    async function runSearch(query) {
+        if (!query) {
+            showConversationList();
+            return;
+        }
+        try {
+            const res = await fetch(`/api/search-users?q=${encodeURIComponent(query)}`);
+            if (!res.ok) throw new Error("search failed");
+            const data = await res.json();
+            renderSearchResults(data.users || []);
+        } catch (err) {
+            searchResults.innerHTML = `<p class="chat-list-empty">Search failed. Check your connection and try again.</p>`;
+            showSearchResults();
+        }
+    }
+
+    searchInput.addEventListener("input", () => {
+        const query = searchInput.value.trim();
+        searchClearBtn.hidden = !query;
+        clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = setTimeout(() => runSearch(query), 250);
+    });
+
+    searchClearBtn.addEventListener("click", () => {
+        searchInput.value = "";
+        searchClearBtn.hidden = true;
+        showConversationList();
+        searchInput.focus();
+    });
+
+    searchResults.addEventListener("click", (e) => {
+        const row = e.target.closest(".chat-row");
+        if (!row) return;
+        const userId = parseInt(row.dataset.userId, 10);
+        searchInput.value = "";
+        searchClearBtn.hidden = true;
+        showConversationList();
+        openConversationForId(userId);
     });
 
     backBtn.addEventListener("click", () => {
@@ -306,6 +554,119 @@
 
     socket.on("error", (payload) => {
         console.error("Socket error:", payload && payload.error);
+    });
+
+    socket.on("presence_update", (payload) => {
+        updatePresenceEverywhere(payload.user_id, payload.online, payload.last_seen);
+    });
+
+    // ---------------------------------------------------------------
+    // Profile modal — edit display name and profile picture
+    // ---------------------------------------------------------------
+    const profileModalBackdrop = document.getElementById("profileModalBackdrop");
+    const openProfileBtn = document.getElementById("openProfileBtn");
+    const closeProfileBtn = document.getElementById("closeProfileBtn");
+    const profileFullNameInput = document.getElementById("profileFullName");
+    const profilePicInput = document.getElementById("profilePicInput");
+    const profileAvatarPreview = document.getElementById("profileAvatarPreview");
+    const saveProfileBtn = document.getElementById("saveProfileBtn");
+    const profileError = document.getElementById("profileError");
+    const profileSuccess = document.getElementById("profileSuccess");
+    const ownAvatar = document.getElementById("ownAvatar");
+    const ownFullName = document.getElementById("ownFullName");
+
+    function openProfileModal() {
+        profileError.hidden = true;
+        profileSuccess.hidden = true;
+        profileFullNameInput.value = ownFullName.textContent.trim();
+        profileAvatarPreview.src = ownAvatar.src;
+        profileModalBackdrop.hidden = false;
+    }
+
+    function closeProfileModal() {
+        profileModalBackdrop.hidden = true;
+    }
+
+    openProfileBtn.addEventListener("click", openProfileModal);
+    closeProfileBtn.addEventListener("click", closeProfileModal);
+    profileModalBackdrop.addEventListener("click", (e) => {
+        if (e.target === profileModalBackdrop) closeProfileModal();
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !profileModalBackdrop.hidden) closeProfileModal();
+    });
+
+    // Picking a new file uploads immediately (matches the "tap avatar to
+    // change it" pattern people expect), then refreshes every avatar shown
+    // for the current user across the page without needing a reload.
+    profilePicInput.addEventListener("change", async () => {
+        const file = profilePicInput.files && profilePicInput.files[0];
+        if (!file) return;
+
+        profileError.hidden = true;
+        profileSuccess.hidden = true;
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const res = await fetch("/api/profile-picture", { method: "POST", body: formData });
+            const data = await res.json();
+
+            if (!res.ok) {
+                profileError.textContent = data.error || "Could not update your photo.";
+                profileError.hidden = false;
+                return;
+            }
+
+            const newSrc = `/static/uploads/${data.profile_pic}?v=${Date.now()}`;
+            profileAvatarPreview.src = newSrc;
+            ownAvatar.src = newSrc;
+            profileSuccess.textContent = "Profile picture updated.";
+            profileSuccess.hidden = false;
+        } catch (err) {
+            profileError.textContent = "Network error. Please try again.";
+            profileError.hidden = false;
+        } finally {
+            profilePicInput.value = "";
+        }
+    });
+
+    saveProfileBtn.addEventListener("click", async () => {
+        profileError.hidden = true;
+        profileSuccess.hidden = true;
+
+        const fullName = profileFullNameInput.value.trim();
+        if (!fullName) {
+            profileError.textContent = "Name can't be empty.";
+            profileError.hidden = false;
+            return;
+        }
+
+        saveProfileBtn.disabled = true;
+        try {
+            const res = await fetch("/api/profile", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ full_name: fullName }),
+            });
+            const data = await res.json();
+
+            if (!res.ok) {
+                profileError.textContent = data.error || "Could not save your changes.";
+                profileError.hidden = false;
+                return;
+            }
+
+            ownFullName.textContent = data.user.full_name;
+            profileSuccess.textContent = "Name updated.";
+            profileSuccess.hidden = false;
+        } catch (err) {
+            profileError.textContent = "Network error. Please try again.";
+            profileError.hidden = false;
+        } finally {
+            saveProfileBtn.disabled = false;
+        }
     });
 
     // ---------------------------------------------------------------
