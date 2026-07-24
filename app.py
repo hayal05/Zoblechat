@@ -17,7 +17,7 @@ import re
 import uuid
 import logging
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def to_iso_utc(dt):
@@ -61,6 +61,10 @@ UPLOAD_FOLDER = os.path.join(BASE_DIR, "static", "uploads")
 # with profile-picture filenames and can be reasoned about (cleaned up,
 # backed up, etc.) independently of avatars.
 CHAT_PHOTOS_FOLDER = os.path.join(UPLOAD_FOLDER, "chat_photos")
+# Stories live in their own subfolder for the same reason chat photos do —
+# independent filename namespace, independent cleanup (expired stories get
+# their files deleted; chat photos never do).
+STORY_PHOTOS_FOLDER = os.path.join(UPLOAD_FOLDER, "story_photos")
 
 IS_PRODUCTION = os.environ.get("FLASK_ENV", "development") == "production"
 
@@ -95,6 +99,16 @@ FULL_NAME_MAX_LENGTH = 60
 # just keeps one request from being (ab)used to probe the whole phone
 # number keyspace in bulk.
 CONTACTS_MATCH_MAX = 1000
+# Stories: photo-only posts that disappear after a fixed lifetime, with a
+# single reaction (no comments, no video).
+STORY_EXPIRY_HOURS = 72
+# How often the background sweep removes expired stories (and their image
+# files) from disk. Queries already filter out expired stories on every
+# request regardless, so this is purely about not letting old files pile up.
+STORY_CLEANUP_INTERVAL_SECONDS = 15 * 60
+# Sane ceiling so one account can't spam an unbounded number of simultaneous
+# active stories.
+MAX_ACTIVE_STORIES_PER_USER = 20
 
 # -------------------------------------------------------------------
 # App Configuration
@@ -133,6 +147,7 @@ app.config["REMEMBER_COOKIE_SECURE"] = IS_PRODUCTION
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(CHAT_PHOTOS_FOLDER, exist_ok=True)
+os.makedirs(STORY_PHOTOS_FOLDER, exist_ok=True)
 
 db = SQLAlchemy(app)
 
@@ -276,6 +291,71 @@ class Message(db.Model):
 
     def __repr__(self):
         return f"<Message {self.id} from {self.sender_id} to {self.recipient_id}>"
+
+
+class Story(db.Model):
+    """A single photo-only story post. Always has a hard expires_at set at
+    creation time (created_at + STORY_EXPIRY_HOURS) — there is no separate
+    "is_active" flag, expiry is purely time-based so it can never drift out
+    of sync with reality."""
+    __tablename__ = "stories"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    # Filename only (relative to static/uploads/story_photos/), same
+    # storage convention as Message.image_path and User.profile_pic.
+    image_path = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+
+    user = db.relationship(
+        "User", backref=db.backref("stories", lazy="dynamic", cascade="all, delete-orphan")
+    )
+
+    def is_expired(self):
+        return datetime.utcnow() >= self.expires_at
+
+    def to_dict(self, viewer_id=None):
+        reacted_by_me = (
+            viewer_id is not None
+            and self.reactions.filter_by(user_id=viewer_id).first() is not None
+        )
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "image_url": url_for("static", filename=f"uploads/story_photos/{self.image_path}"),
+            "created_at": to_iso_utc(self.created_at),
+            "expires_at": to_iso_utc(self.expires_at),
+            "reaction_count": self.reactions.count(),
+            "reacted_by_me": reacted_by_me,
+        }
+
+    def __repr__(self):
+        return f"<Story {self.id} by {self.user_id}>"
+
+
+class StoryReaction(db.Model):
+    """The only reaction a story can get: one purple-heart "love" per user
+    per story (toggleable — sending it again removes it). Stories have no
+    comment feature at all, so there is nothing else to model here."""
+    __tablename__ = "story_reactions"
+
+    id = db.Column(db.Integer, primary_key=True)
+    story_id = db.Column(db.Integer, db.ForeignKey("stories.id"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    story = db.relationship(
+        "Story", backref=db.backref("reactions", lazy="dynamic", cascade="all, delete-orphan")
+    )
+    reactor = db.relationship("User")
+
+    __table_args__ = (
+        db.UniqueConstraint("story_id", "user_id", name="uq_story_reaction_user"),
+    )
+
+    def __repr__(self):
+        return f"<StoryReaction story={self.story_id} user={self.user_id}>"
 
 
 def _ensure_schema():
@@ -429,6 +509,49 @@ def get_room_name(user_id):
     return f"user_{user_id}"
 
 
+def get_conversation_partner_ids(user_id):
+    """Everyone this user has ever exchanged a message with, in either
+    direction. Shared by the sidebar (index()) and the stories feature,
+    since stories reuse the same "people you've actually talked to" audience
+    as the chat list rather than being visible to every registered account."""
+    return {
+        row[0] for row in
+        db.session.query(Message.recipient_id).filter(Message.sender_id == user_id)
+        .union(
+            db.session.query(Message.sender_id).filter(Message.recipient_id == user_id)
+        ).all()
+    }
+
+
+def purge_expired_stories():
+    """Deletes story rows (and their reactions, via cascade) plus the
+    underlying image files once expires_at has passed. Story queries already
+    filter on expires_at themselves, so nobody can ever *see* an expired
+    story regardless of this — this function is only about not letting the
+    image files and rows pile up on disk/in the DB after they're no longer
+    reachable. Called both lazily (at the top of the story routes) and on a
+    timer (_story_cleanup_loop) so cleanup happens even during quiet periods
+    with no traffic."""
+    expired = Story.query.filter(Story.expires_at <= datetime.utcnow()).all()
+    if not expired:
+        return
+
+    for story in expired:
+        path = os.path.join(STORY_PHOTOS_FOLDER, story.image_path)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            logger.warning("Could not remove expired story image: %s", story.image_path)
+        db.session.delete(story)
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to purge expired stories")
+
+
 # -------------------------------------------------------------------
 # Presence tracking ("online" / "last seen")
 # -------------------------------------------------------------------
@@ -514,13 +637,7 @@ def index():
     # exchanged messages with — it is NOT a directory of every registered
     # account. Discovering anyone else happens through the search box
     # (/api/search-users), which starts a fresh conversation on demand.
-    conversation_partner_ids = {
-        row[0] for row in
-        db.session.query(Message.recipient_id).filter(Message.sender_id == current_user.id)
-        .union(
-            db.session.query(Message.sender_id).filter(Message.recipient_id == current_user.id)
-        ).all()
-    }
+    conversation_partner_ids = get_conversation_partner_ids(current_user.id)
 
     # Most recent message time with each partner, so the list can be sorted
     # like a normal messaging app (latest conversation first) rather than
@@ -1026,6 +1143,259 @@ def send_photo_message(recipient_id):
     socketio.emit("receive_message", payload, room=get_room_name(current_user.id))
 
     return jsonify({"message": "Photo sent.", "data": payload}), 201
+
+
+# -------------------------------------------------------------------
+# Stories API Routes (JSON)
+#
+# Photo-only posts (no video) that expire automatically after
+# STORY_EXPIRY_HOURS (72h), visible to the same audience as the chat list —
+# people the current user has actually messaged, plus themselves. The only
+# reaction is a purple heart "love"; there is no comment feature at all.
+# -------------------------------------------------------------------
+@app.route("/api/stories", methods=["GET"])
+@login_required
+def list_stories():
+    purge_expired_stories()
+
+    visible_ids = get_conversation_partner_ids(current_user.id) | {current_user.id}
+
+    active_stories = (
+        Story.query.filter(Story.user_id.in_(visible_ids), Story.expires_at > datetime.utcnow())
+        .order_by(Story.created_at.asc())
+        .all()
+    )
+
+    grouped = defaultdict(list)
+    for story in active_stories:
+        grouped[story.user_id].append(story)
+
+    # The current user's own entry always comes first and is always present
+    # (even with zero active stories), so the client can render a "your
+    # story" slot with an add button regardless of whether they've posted.
+    own_stories = grouped.pop(current_user.id, [])
+    users_payload = [{
+        "user_id": current_user.id,
+        "username": current_user.username,
+        "full_name": current_user.full_name,
+        "profile_pic": current_user.profile_pic,
+        "stories": [s.to_dict(viewer_id=current_user.id) for s in own_stories],
+    }]
+
+    for user_id, user_stories in grouped.items():
+        user = user_stories[0].user
+        users_payload.append({
+            "user_id": user.id,
+            "username": user.username,
+            "full_name": user.full_name,
+            "profile_pic": user.profile_pic,
+            "stories": [s.to_dict(viewer_id=current_user.id) for s in user_stories],
+        })
+
+    return jsonify({"users": users_payload}), 200
+
+
+@app.route("/api/stories", methods=["POST"])
+@login_required
+@limiter.limit("20 per hour")
+def post_story():
+    purge_expired_stories()
+
+    active_count = Story.query.filter(
+        Story.user_id == current_user.id, Story.expires_at > datetime.utcnow()
+    ).count()
+    if active_count >= MAX_ACTIVE_STORIES_PER_USER:
+        return jsonify({
+            "error": f"You can only have {MAX_ACTIVE_STORIES_PER_USER} active stories at once."
+        }), 400
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file part in the request."}), 400
+
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "No file selected."}), 400
+
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Unsupported file type. Use PNG, JPG, GIF, or WEBP."}), 400
+
+    original_name = secure_filename(file.filename)
+    ext = original_name.rsplit(".", 1)[1].lower()
+    # Same collision-proof naming scheme used for profile pictures and chat
+    # photos: sender id + a uuid.
+    unique_name = f"{current_user.id}_{uuid.uuid4().hex}.{ext}"
+    filepath = os.path.join(STORY_PHOTOS_FOLDER, unique_name)
+
+    try:
+        file.save(filepath)
+    except OSError:
+        logger.exception("Failed to save uploaded story photo")
+        return jsonify({"error": "Could not save the uploaded file."}), 500
+
+    # Same real-image + decompression-bomb guard used elsewhere — an
+    # extension check alone can be spoofed.
+    if not verify_is_real_image(filepath):
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        return jsonify({"error": "The uploaded file is not a valid image."}), 400
+
+    now = datetime.utcnow()
+    story = Story(
+        user_id=current_user.id,
+        image_path=unique_name,
+        created_at=now,
+        expires_at=now + timedelta(hours=STORY_EXPIRY_HOURS),
+    )
+
+    try:
+        db.session.add(story)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        logger.exception("Failed to save story")
+        return jsonify({"error": "Could not post story. Please try again."}), 500
+
+    payload = story.to_dict(viewer_id=current_user.id)
+    payload["username"] = current_user.username
+    payload["full_name"] = current_user.full_name
+    payload["profile_pic"] = current_user.profile_pic
+
+    # Let every conversation partner's open tab(s) know a new story landed,
+    # the same private-room broadcast pattern used for messages.
+    for partner_id in get_conversation_partner_ids(current_user.id):
+        socketio.emit("new_story", payload, room=get_room_name(partner_id))
+    socketio.emit("new_story", payload, room=get_room_name(current_user.id))
+
+    return jsonify({"message": "Story posted.", "data": payload}), 201
+
+
+@app.route("/api/stories/<int:story_id>", methods=["DELETE"])
+@login_required
+def delete_story(story_id):
+    story = Story.query.get(story_id)
+    if not story or story.is_expired():
+        return jsonify({"error": "Story not found."}), 404
+    if story.user_id != current_user.id:
+        return jsonify({"error": "You can only delete your own stories."}), 403
+
+    filepath = os.path.join(STORY_PHOTOS_FOLDER, story.image_path)
+
+    try:
+        db.session.delete(story)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to delete story")
+        return jsonify({"error": "Could not delete story. Please try again."}), 500
+
+    try:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+    except OSError:
+        logger.warning("Could not remove deleted story image: %s", story.image_path)
+
+    for partner_id in get_conversation_partner_ids(current_user.id):
+        socketio.emit(
+            "story_deleted", {"story_id": story_id, "user_id": current_user.id},
+            room=get_room_name(partner_id),
+        )
+    socketio.emit(
+        "story_deleted", {"story_id": story_id, "user_id": current_user.id},
+        room=get_room_name(current_user.id),
+    )
+
+    return jsonify({"message": "Story deleted."}), 200
+
+
+@app.route("/api/stories/<int:story_id>/react", methods=["POST"])
+@login_required
+@limiter.limit("120 per hour")
+def react_to_story(story_id):
+    """Toggles the purple heart on this story for the current user — send
+    it again to un-react. This is the only reaction stories support, and
+    there is no comment endpoint at all."""
+    story = Story.query.get(story_id)
+    if not story or story.is_expired():
+        return jsonify({"error": "Story not found."}), 404
+
+    existing = StoryReaction.query.filter_by(story_id=story_id, user_id=current_user.id).first()
+
+    try:
+        if existing:
+            db.session.delete(existing)
+            reacted = False
+        else:
+            db.session.add(StoryReaction(story_id=story_id, user_id=current_user.id))
+            reacted = True
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to toggle story reaction")
+        return jsonify({"error": "Could not update reaction. Please try again."}), 500
+
+    reaction_count = story.reactions.count()
+
+    # Only the story owner's open tab(s) need a live update — everyone else
+    # already has their own toggle state from this response.
+    socketio.emit("story_reacted", {
+        "story_id": story_id,
+        "user_id": story.user_id,
+        "reactor_id": current_user.id,
+        "reactor_username": current_user.username,
+        "reacted": reacted,
+        "reaction_count": reaction_count,
+    }, room=get_room_name(story.user_id))
+
+    return jsonify({"reacted": reacted, "reaction_count": reaction_count}), 200
+
+
+@app.route("/api/stories/<int:story_id>/reactors", methods=["GET"])
+@login_required
+def story_reactors(story_id):
+    """Who's loved this story — visible only to the story's own owner, the
+    same privacy model most stories features use."""
+    story = Story.query.get(story_id)
+    if not story or story.is_expired():
+        return jsonify({"error": "Story not found."}), 404
+    if story.user_id != current_user.id:
+        return jsonify({"error": "You can only view reactions on your own stories."}), 403
+
+    reactors = (
+        User.query.join(StoryReaction, StoryReaction.user_id == User.id)
+        .filter(StoryReaction.story_id == story_id)
+        .order_by(StoryReaction.created_at.desc())
+        .all()
+    )
+    return jsonify({
+        "reactors": [
+            {"id": u.id, "username": u.username, "full_name": u.full_name, "profile_pic": u.profile_pic}
+            for u in reactors
+        ]
+    }), 200
+
+
+def _story_cleanup_loop():
+    """Runs for the lifetime of the process, sweeping expired stories off
+    disk/DB on a fixed cadence. Uses socketio.sleep (eventlet-friendly,
+    cooperative) rather than time.sleep so it never blocks the single
+    worker's event loop — same reasoning as the eventlet.monkey_patch()
+    note at the top of this file."""
+    while True:
+        socketio.sleep(STORY_CLEANUP_INTERVAL_SECONDS)
+        with app.app_context():
+            try:
+                purge_expired_stories()
+            except Exception:
+                logger.exception("Story cleanup loop failed")
+
+
+socketio.start_background_task(_story_cleanup_loop)
 
 
 # -------------------------------------------------------------------
