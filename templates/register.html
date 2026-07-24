@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Create account · Zoble Chat{% endblock %}
+
+{% block body %}
+<div class="auth-screen">
+    <div class="auth-card">
+        <div class="brand-mark">
+            <span class="brand-dot"></span>
+            <span class="brand-word">Zoble Chat</span>
+        </div>
+        <h1 class="auth-heading">Create your account</h1>
+        <p class="auth-subheading">Pick a username, set a password, start chatting.</p>
+
+        <form id="registerForm" class="auth-form" novalidate>
+            <label class="field-label" for="username">Username</label>
+            <input class="field-input" type="text" id="username" name="username" autocomplete="username" required>
+
+            <label class="field-label" for="password">Password</label>
+            <input class="field-input" type="password" id="password" name="password" autocomplete="new-password" minlength="8" required>
+            <p class="field-hint">At least 8 characters, with a letter and a number.</p>
+
+            <p class="field-error" id="registerError" hidden></p>
+
+            <button class="btn btn-primary btn-block" type="submit">Create account</button>
+        </form>
+
+        <p class="auth-switch">Already have an account? <a href="{{ url_for('login_page') }}">Log in</a></p>
+    </div>
+</div>
+
+<script>
+    document.getElementById("registerForm").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const errorEl = document.getElementById("registerError");
+        errorEl.hidden = true;
+
+        const payload = {
+            username: document.getElementById("username").value.trim(),
+            password: document.getElementById("password").value,
+        };
+
+        try {
+            const res = await fetch("/api/register", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            const data = await res.json();
+
+            if (!res.ok) {
+                errorEl.textContent = data.error || "Something went wrong.";
+                errorEl.hidden = false;
+                return;
+            }
+
+            window.location.href = "/";
+        } catch (err) {
+            errorEl.textContent = "Network error. Please try again.";
+            errorEl.hidden = false;
+        }
+    });
+</script>
+{% endblock %}
