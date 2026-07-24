@@ -19,6 +19,22 @@ import logging
 from collections import defaultdict
 from datetime import datetime
 
+
+def to_iso_utc(dt):
+    """Serialize a naive UTC datetime (as produced by datetime.utcnow(), which
+    is what every timestamp in this app is stored as) into an ISO string that
+    explicitly marks itself as UTC.
+
+    Without this, `dt.isoformat()` alone produces a string with no timezone
+    designator (e.g. "2026-07-24T09:15:30"), and JavaScript's `new Date(...)`
+    parses timezone-less date-time strings as *local* time, not UTC. That
+    silently shifts every timestamp by the browser's UTC offset — e.g. a
+    user in UTC+3 would see "last seen" times that are 3 hours further in
+    the past than they really are, even for someone who just went offline
+    a moment ago.
+    """
+    return dt.isoformat() + "Z" if dt else None
+
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, redirect, url_for, render_template
 from flask_sqlalchemy import SQLAlchemy
@@ -41,6 +57,10 @@ load_dotenv()  # loads a local .env file if present; no-op in production if abse
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "static", "uploads")
+# Chat photo attachments live in their own subfolder so they never collide
+# with profile-picture filenames and can be reasoned about (cleaned up,
+# backed up, etc.) independently of avatars.
+CHAT_PHOTOS_FOLDER = os.path.join(UPLOAD_FOLDER, "chat_photos")
 
 IS_PRODUCTION = os.environ.get("FLASK_ENV", "development") == "production"
 
@@ -62,6 +82,7 @@ USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_.]{3,30}$")
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PASSWORD_MIN_LENGTH = 8
 MESSAGE_MAX_LENGTH = 4000
+CHAT_PHOTO_MAX_BYTES = 5 * 1024 * 1024   # mirrors MAX_CONTENT_LENGTH (Flask enforces this globally too)
 FULL_NAME_MIN_LENGTH = 1
 FULL_NAME_MAX_LENGTH = 60
 
@@ -101,6 +122,7 @@ app.config["REMEMBER_COOKIE_HTTPONLY"] = True
 app.config["REMEMBER_COOKIE_SECURE"] = IS_PRODUCTION
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(CHAT_PHOTOS_FOLDER, exist_ok=True)
 
 db = SQLAlchemy(app)
 
@@ -193,9 +215,7 @@ class User(db.Model, UserMixin):
             data["online"] = online
             # Don't report a stale last_seen while the user is currently
             # online — the client should just show "Online" in that case.
-            data["last_seen"] = None if online else (
-                self.last_seen.isoformat() if self.last_seen else None
-            )
+            data["last_seen"] = None if online else to_iso_utc(self.last_seen)
         return data
 
     def __repr__(self):
@@ -208,7 +228,17 @@ class Message(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     sender_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     recipient_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    # For text messages this holds the message body. For photo messages it's
+    # kept as a short human-readable label ("Photo") so old clients (or the
+    # sidebar preview) still have *something* sensible to show, while the
+    # actual attachment lives in image_path.
     content = db.Column(db.String(MESSAGE_MAX_LENGTH), nullable=False)
+    # "text" or "image" — lets both the API and the client tell the two
+    # kinds of messages apart without guessing from content.
+    message_type = db.Column(db.String(10), nullable=False, default="text")
+    # Filename only (relative to static/uploads/chat_photos/), mirroring how
+    # User.profile_pic stores just a filename rather than a full path.
+    image_path = db.Column(db.String(255), nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     is_read = db.Column(db.Boolean, default=False, nullable=False)
 
@@ -218,7 +248,12 @@ class Message(db.Model):
             "sender_id": self.sender_id,
             "recipient_id": self.recipient_id,
             "content": self.content,
-            "timestamp": self.timestamp.isoformat(),
+            "message_type": self.message_type,
+            "image_url": (
+                url_for("static", filename=f"uploads/chat_photos/{self.image_path}")
+                if self.image_path else None
+            ),
+            "timestamp": to_iso_utc(self.timestamp),
             "is_read": self.is_read,
         }
 
@@ -265,6 +300,22 @@ def _ensure_schema():
         logger.info("Migrating users table: adding 'last_seen' column")
         with db.engine.begin() as conn:
             conn.execute(text("ALTER TABLE users ADD COLUMN last_seen DATETIME"))
+
+    if "messages" in inspector.get_table_names():
+        existing_message_columns = {col["name"] for col in inspector.get_columns("messages")}
+
+        if "message_type" not in existing_message_columns:
+            logger.info("Migrating messages table: adding 'message_type' column")
+            with db.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE messages ADD COLUMN message_type VARCHAR(10)"))
+                conn.execute(text(
+                    "UPDATE messages SET message_type = 'text' WHERE message_type IS NULL"
+                ))
+
+        if "image_path" not in existing_message_columns:
+            logger.info("Migrating messages table: adding 'image_path' column")
+            with db.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE messages ADD COLUMN image_path VARCHAR(255)"))
 
 
 with app.app_context():
@@ -469,7 +520,7 @@ def index():
             "profile_pic": u.profile_pic,
             "unread_count": unread_counts.get(u.id, 0),
             "online": is_user_online(u.id),
-            "last_seen": (None if is_user_online(u.id) else (u.last_seen.isoformat() if u.last_seen else None)),
+            "last_seen": (None if is_user_online(u.id) else to_iso_utc(u.last_seen)),
         }
         for u in other_users
     ]
@@ -762,6 +813,87 @@ def update_profile_picture():
     return jsonify({"message": "Profile picture updated.", "profile_pic": unique_name}), 200
 
 
+@app.route("/api/messages/<int:recipient_id>/photo", methods=["POST"])
+@login_required
+@limiter.limit("30 per hour")
+def send_photo_message(recipient_id):
+    """Uploads an image and sends it as a chat message to recipient_id, the
+    same way handle_send_message() does for text — it persists a Message
+    row and broadcasts it over Socket.IO to both parties' rooms, so every
+    open tab/device on both ends updates instantly without a page reload.
+    """
+    if recipient_id == current_user.id:
+        return jsonify({"error": "You cannot send a photo to yourself."}), 400
+
+    recipient = User.query.get(recipient_id)
+    if not recipient:
+        return jsonify({"error": "Recipient does not exist."}), 404
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file part in the request."}), 400
+
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "No file selected."}), 400
+
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Unsupported file type. Use PNG, JPG, GIF, or WEBP."}), 400
+
+    original_name = secure_filename(file.filename)
+    ext = original_name.rsplit(".", 1)[1].lower()
+    # Prefixing with sender id + a uuid (same scheme as profile pictures)
+    # means filenames can never collide or be guessed/enumerated.
+    unique_name = f"{current_user.id}_{uuid.uuid4().hex}.{ext}"
+    filepath = os.path.join(CHAT_PHOTOS_FOLDER, unique_name)
+
+    try:
+        file.save(filepath)
+    except OSError:
+        logger.exception("Failed to save uploaded chat photo")
+        return jsonify({"error": "Could not save the uploaded file."}), 500
+
+    # Same real-image + decompression-bomb guard used for profile pictures —
+    # an extension check alone can be spoofed.
+    if not verify_is_real_image(filepath):
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        return jsonify({"error": "The uploaded file is not a valid image."}), 400
+
+    try:
+        message = Message(
+            sender_id=current_user.id,
+            recipient_id=recipient_id,
+            content="Photo",
+            message_type="image",
+            image_path=unique_name,
+            is_read=False,
+        )
+        db.session.add(message)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        logger.exception("Failed to save photo message")
+        return jsonify({"error": "Could not send photo. Please try again."}), 500
+
+    payload = message.to_dict()
+    payload["sender_username"] = current_user.username
+    payload["sender_profile_pic"] = current_user.profile_pic
+
+    # Broadcast exactly like a text message so both sides' open tabs update
+    # live — the client's existing "receive_message" handler already knows
+    # how to render either kind, distinguishing on message_type.
+    socketio.emit("receive_message", payload, room=get_room_name(recipient_id))
+    socketio.emit("receive_message", payload, room=get_room_name(current_user.id))
+
+    return jsonify({"message": "Photo sent.", "data": payload}), 201
+
+
 # -------------------------------------------------------------------
 # Socket.IO Event Handlers
 # -------------------------------------------------------------------
@@ -938,7 +1070,7 @@ def handle_disconnect():
         socketio.emit("presence_update", {
             "user_id": current_user.id,
             "online": False,
-            "last_seen": now.isoformat(),
+            "last_seen": to_iso_utc(now),
         })
 
 
