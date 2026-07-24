@@ -719,6 +719,9 @@ a:focus-visible {
     z-index: 100;
     animation: modal-fade-in 0.18s var(--ease) both;
 }
+.modal-backdrop[hidden] {
+    display: none;
+}
 @keyframes modal-fade-in {
     from { opacity: 0; }
     to { opacity: 1; }
