@@ -661,6 +661,7 @@
             ownFullName.textContent = data.user.full_name;
             profileSuccess.textContent = "Name updated.";
             profileSuccess.hidden = false;
+            setTimeout(closeProfileModal, 700);
         } catch (err) {
             profileError.textContent = "Network error. Please try again.";
             profileError.hidden = false;
