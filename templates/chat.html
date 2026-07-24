@@ -35,6 +35,21 @@
             </button>
         </div>
 
+        <button class="contacts-sync-row" id="findContactsBtn" type="button">
+            <span class="contacts-sync-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="9" cy="7" r="4"></circle>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                </svg>
+            </span>
+            <span class="contacts-sync-label">Find contacts on Zoble</span>
+            <svg class="contacts-sync-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 18 15 12 9 6"></polyline>
+            </svg>
+        </button>
+
         <div class="chat-list" id="chatList">
             {% if users %}
                 {% for user in users %}
@@ -128,6 +143,37 @@
                 <p class="field-success" id="profileSuccess" hidden></p>
 
                 <button class="btn btn-primary btn-block" id="saveProfileBtn" type="button">Save changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ FIND CONTACTS MODAL ============ -->
+    <div class="modal-backdrop" id="contactsModalBackdrop" hidden>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="contactsModalTitle">
+            <div class="modal-header">
+                <h2 id="contactsModalTitle">Find contacts on Zoble</h2>
+                <button class="btn-icon" id="closeContactsBtn" title="Close" type="button">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="modal-body">
+                <p class="field-hint" id="contactsIntro">
+                    Choose contacts from your phone and Zoble will check which of them are
+                    already here — nobody is notified, and your contacts are never stored on
+                    our servers.
+                </p>
+
+                <button class="btn btn-primary btn-block" id="chooseContactsBtn" type="button">
+                    Choose contacts from your phone
+                </button>
+
+                <p class="field-error" id="contactsError" hidden></p>
+
+                <div class="chat-list contacts-result-list" id="contactsResultList" hidden></div>
             </div>
         </div>
     </div>
@@ -560,6 +606,151 @@
     backBtn.addEventListener("click", () => {
         appShell.classList.remove("conversation-open");
         document.title = "Zoble Chat · Messages";
+    });
+
+    // ---------------------------------------------------------------
+    // Find contacts on Zoble — reads phone numbers from the device's
+    // address book (via the browser's Contact Picker API) and checks
+    // which of them are registered Zoble accounts, the same idea as
+    // Telegram/WhatsApp's "contacts already on the app" list.
+    //
+    // The Contact Picker API (navigator.contacts.select) is currently only
+    // available in Chromium-based browsers on Android, requires a secure
+    // (HTTPS) origin, and must be triggered by a direct user gesture — it
+    // can't be invoked on page load or from other async callbacks.
+    // ---------------------------------------------------------------
+    const findContactsBtn = document.getElementById("findContactsBtn");
+    const contactsModalBackdrop = document.getElementById("contactsModalBackdrop");
+    const closeContactsBtn = document.getElementById("closeContactsBtn");
+    const chooseContactsBtn = document.getElementById("chooseContactsBtn");
+    const contactsError = document.getElementById("contactsError");
+    const contactsResultList = document.getElementById("contactsResultList");
+    const contactsIntro = document.getElementById("contactsIntro");
+
+    function contactPickerSupported() {
+        return !!(navigator.contacts && navigator.contacts.select && window.isSecureContext);
+    }
+
+    function openContactsModal() {
+        contactsError.hidden = true;
+        contactsResultList.hidden = true;
+        contactsResultList.innerHTML = "";
+        chooseContactsBtn.disabled = false;
+        chooseContactsBtn.textContent = "Choose contacts from your phone";
+
+        if (!contactPickerSupported()) {
+            chooseContactsBtn.hidden = true;
+            contactsIntro.textContent =
+                "Reading phone contacts isn't supported in this browser yet. " +
+                "Try Zoble in Chrome for Android, or use the search box above instead.";
+        } else {
+            chooseContactsBtn.hidden = false;
+            contactsIntro.textContent =
+                "Choose contacts from your phone and Zoble will check which of them are " +
+                "already here — nobody is notified, and your contacts are never stored on " +
+                "our servers.";
+        }
+        contactsModalBackdrop.hidden = false;
+    }
+
+    function closeContactsModal() {
+        contactsModalBackdrop.hidden = true;
+    }
+
+    findContactsBtn.addEventListener("click", openContactsModal);
+    closeContactsBtn.addEventListener("click", closeContactsModal);
+    contactsModalBackdrop.addEventListener("click", (e) => {
+        if (e.target === contactsModalBackdrop) closeContactsModal();
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !contactsModalBackdrop.hidden) closeContactsModal();
+    });
+
+    function renderContactMatches(matches, checkedCount) {
+        contactsResultList.innerHTML = "";
+
+        if (!matches.length) {
+            contactsResultList.innerHTML = `
+                <p class="chat-list-empty">
+                    ${checkedCount
+                        ? "None of those contacts are on Zoble yet."
+                        : "No usable phone numbers were found in that selection."}
+                </p>`;
+            contactsResultList.hidden = false;
+            return;
+        }
+
+        matches.forEach((u) => {
+            knownUsers[u.id] = { ...(knownUsers[u.id] || {}), ...u };
+            const row = buildChatRow(knownUsers[u.id]);
+            row.querySelector(".chat-row-preview").textContent = `@${u.username} · on Zoble`;
+            contactsResultList.appendChild(row);
+        });
+        contactsResultList.hidden = false;
+    }
+
+    contactsResultList.addEventListener("click", (e) => {
+        const row = e.target.closest(".chat-row");
+        if (!row) return;
+        closeContactsModal();
+        openConversationForId(parseInt(row.dataset.userId, 10));
+    });
+
+    chooseContactsBtn.addEventListener("click", async () => {
+        contactsError.hidden = true;
+        contactsResultList.hidden = true;
+
+        let picked;
+        try {
+            // 'tel' is the only property this feature needs; requesting less
+            // than the full contact record keeps the browser's permission
+            // prompt narrower and less alarming to grant.
+            picked = await navigator.contacts.select(["tel"], { multiple: true });
+        } catch (err) {
+            // Thrown on user cancel as well as on genuine permission errors —
+            // there's no reliable way to tell those apart across browsers, so
+            // treat it as a silent no-op rather than showing a scary error
+            // every time someone just backs out of the picker.
+            return;
+        }
+
+        if (!picked || !picked.length) return;
+
+        // Flatten every tel entry across every selected contact into one
+        // plain list of raw number strings; a single contact can have
+        // several numbers (home/mobile/work), and all are worth checking.
+        const rawNumbers = picked.flatMap((c) => Array.isArray(c.tel) ? c.tel : []);
+        if (!rawNumbers.length) {
+            contactsError.textContent = "Those contacts don't have any phone numbers saved.";
+            contactsError.hidden = false;
+            return;
+        }
+
+        chooseContactsBtn.disabled = true;
+        chooseContactsBtn.textContent = "Checking…";
+
+        try {
+            const res = await fetch("/api/contacts/match", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ phones: rawNumbers }),
+            });
+            const data = await res.json();
+
+            if (!res.ok) {
+                contactsError.textContent = data.error || "Could not check your contacts.";
+                contactsError.hidden = false;
+                return;
+            }
+
+            renderContactMatches(data.matches || [], data.checked || 0);
+        } catch (err) {
+            contactsError.textContent = "Network error. Please try again.";
+            contactsError.hidden = false;
+        } finally {
+            chooseContactsBtn.disabled = false;
+            chooseContactsBtn.textContent = "Choose contacts from your phone";
+        }
     });
 
     // ---------------------------------------------------------------

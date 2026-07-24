@@ -15,8 +15,20 @@
             <label class="field-label" for="fullName">Name</label>
             <input class="field-input" type="text" id="fullName" name="full_name" autocomplete="name" maxlength="60" required>
 
-            <label class="field-label" for="email">Email</label>
-            <input class="field-input" type="email" id="email" name="email" autocomplete="email" required>
+            <div class="contact-toggle" role="tablist" aria-label="Sign up with">
+                <button type="button" class="contact-toggle-btn is-active" id="contactTabEmail" role="tab" aria-selected="true">Email</button>
+                <button type="button" class="contact-toggle-btn" id="contactTabPhone" role="tab" aria-selected="false">Phone number</button>
+            </div>
+
+            <div id="emailField">
+                <label class="field-label" for="email">Email</label>
+                <input class="field-input" type="email" id="email" name="email" autocomplete="email">
+            </div>
+
+            <div id="phoneField" hidden>
+                <label class="field-label" for="phone">Phone number</label>
+                <input class="field-input" type="tel" id="phone" name="phone" autocomplete="tel" placeholder="+15551234567">
+            </div>
 
             <label class="field-label" for="username">Username</label>
             <input class="field-input" type="text" id="username" name="username" autocomplete="username" required>
@@ -35,6 +47,33 @@
 </div>
 
 <script>
+    const contactTabEmail = document.getElementById("contactTabEmail");
+    const contactTabPhone = document.getElementById("contactTabPhone");
+    const emailField = document.getElementById("emailField");
+    const phoneField = document.getElementById("phoneField");
+    const emailInput = document.getElementById("email");
+    const phoneInput = document.getElementById("phone");
+
+    let contactMethod = "email";
+
+    function setContactMethod(method) {
+        contactMethod = method;
+        const isEmail = method === "email";
+
+        emailField.hidden = !isEmail;
+        phoneField.hidden = isEmail;
+        emailInput.required = isEmail;
+        phoneInput.required = !isEmail;
+
+        contactTabEmail.classList.toggle("is-active", isEmail);
+        contactTabEmail.setAttribute("aria-selected", String(isEmail));
+        contactTabPhone.classList.toggle("is-active", !isEmail);
+        contactTabPhone.setAttribute("aria-selected", String(!isEmail));
+    }
+
+    contactTabEmail.addEventListener("click", () => setContactMethod("email"));
+    contactTabPhone.addEventListener("click", () => setContactMethod("phone"));
+
     document.getElementById("registerForm").addEventListener("submit", async (e) => {
         e.preventDefault();
         const errorEl = document.getElementById("registerError");
@@ -42,9 +81,11 @@
 
         const payload = {
             full_name: document.getElementById("fullName").value.trim(),
-            email: document.getElementById("email").value.trim(),
             username: document.getElementById("username").value.trim(),
             password: document.getElementById("password").value,
+            contact_method: contactMethod,
+            email: contactMethod === "email" ? emailInput.value.trim() : "",
+            phone: contactMethod === "phone" ? phoneInput.value.trim() : "",
         };
 
         try {
