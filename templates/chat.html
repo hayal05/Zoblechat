@@ -73,6 +73,13 @@
             </div>
         </div>
 
+        <!-- Stories — photo-only, expire after 72h, purple 💜 love reaction only -->
+        <div class="stories-bar" id="storiesBar">
+            <!-- Populated by JS: "Your story" first, then people you've messaged -->
+        </div>
+        <input type="file" id="storyPhotoInput" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+        <p class="story-upload-status" id="storyUploadStatus" hidden></p>
+
         <!-- Chats / Online contacts — side by side, icon-led tabs -->
         <div class="view-tabs" id="viewTabs">
             <button class="view-tab active" id="chatsTabBtn" type="button" data-view="chats">
@@ -264,6 +271,58 @@
         </button>
         <img class="lightbox-image" id="lightboxImage" src="" alt="Shared photo">
     </div>
+
+    <!-- ============ STORY VIEWER ============ -->
+    <div class="modal-backdrop story-viewer-backdrop" id="storyViewerBackdrop" hidden>
+        <div class="story-viewer" id="storyViewer">
+            <div class="story-progress-row" id="storyProgressRow">
+                <!-- Populated by JS: one segment per story for the person being viewed -->
+            </div>
+            <header class="story-viewer-header">
+                <span class="avatar avatar-sm">
+                    <img id="storyViewerAvatar" src="" alt="">
+                </span>
+                <span class="story-viewer-identity">
+                    <span class="story-viewer-name" id="storyViewerName"></span>
+                    <span class="story-viewer-time" id="storyViewerTime"></span>
+                </span>
+                <button class="btn-icon story-viewer-delete" id="storyDeleteBtn" type="button" title="Delete this story" hidden>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                        <path d="M10 11v6"></path>
+                        <path d="M14 11v6"></path>
+                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+                    </svg>
+                </button>
+                <button class="btn-icon story-viewer-close" id="storyViewerCloseBtn" title="Close" type="button">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </header>
+
+            <div class="story-viewer-stage" id="storyViewerStage">
+                <button class="story-nav story-nav-prev" id="storyPrevBtn" type="button" aria-label="Previous story"></button>
+                <img class="story-viewer-image" id="storyViewerImage" src="" alt="Story photo">
+                <button class="story-nav story-nav-next" id="storyNextBtn" type="button" aria-label="Next story"></button>
+            </div>
+
+            <footer class="story-viewer-footer">
+                <button class="story-love-btn" id="storyLoveBtn" type="button" title="React with 💜">
+                    <span class="story-love-icon">💜</span>
+                </button>
+                <button class="story-reactors-btn" id="storyReactorsBtn" type="button" hidden>
+                    <span class="story-love-icon story-love-icon-sm">💜</span>
+                    <span id="storyReactorsCount">0</span>
+                </button>
+            </footer>
+
+            <!-- Who loved this story — only ever shown to the story's own owner -->
+            <div class="story-reactors-panel" id="storyReactorsPanel" hidden></div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -384,6 +443,384 @@
     document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && !lightboxBackdrop.hidden) closeLightbox();
     });
+
+    // ---------------------------------------------------------------
+    // Stories — photo-only posts (no video) that expire after 72 hours,
+    // with a single purple 💜 "love" reaction and no comments at all.
+    // ---------------------------------------------------------------
+    const STORY_ALLOWED_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+    const STORY_MAX_BYTES = 5 * 1024 * 1024;
+    const STORY_SLIDE_MS = 5000;
+
+    const storiesBar = document.getElementById("storiesBar");
+    const storyPhotoInput = document.getElementById("storyPhotoInput");
+    const storyUploadStatus = document.getElementById("storyUploadStatus");
+
+    const storyViewerBackdrop = document.getElementById("storyViewerBackdrop");
+    const storyProgressRow = document.getElementById("storyProgressRow");
+    const storyViewerAvatar = document.getElementById("storyViewerAvatar");
+    const storyViewerName = document.getElementById("storyViewerName");
+    const storyViewerTime = document.getElementById("storyViewerTime");
+    const storyViewerImage = document.getElementById("storyViewerImage");
+    const storyViewerCloseBtn = document.getElementById("storyViewerCloseBtn");
+    const storyDeleteBtn = document.getElementById("storyDeleteBtn");
+    const storyPrevBtn = document.getElementById("storyPrevBtn");
+    const storyNextBtn = document.getElementById("storyNextBtn");
+    const storyLoveBtn = document.getElementById("storyLoveBtn");
+    const storyReactorsBtn = document.getElementById("storyReactorsBtn");
+    const storyReactorsCount = document.getElementById("storyReactorsCount");
+    const storyReactorsPanel = document.getElementById("storyReactorsPanel");
+    const storyViewerStage = document.getElementById("storyViewerStage");
+
+    // Keyed by user id: { user_id, username, full_name, profile_pic, stories: [...] }
+    let storiesByUser = {};
+    // Display order for the bar (and for hopping to the next/previous person
+    // once you run off the end of someone's stories in the viewer).
+    let storyOrder = [];
+    // Session-only "seen" tracking so a ring can dim after viewing — not
+    // persisted server-side, since only the reaction (not view state) is
+    // part of this feature.
+    const viewedStoryIds = new Set();
+
+    let viewingUserId = null;
+    let viewingIndex = 0;
+    let storyTimer = null;
+    let storyPaused = false;
+
+    async function loadStories() {
+        try {
+            const res = await fetch("/api/stories");
+            if (!res.ok) return;
+            const data = await res.json();
+            storiesByUser = {};
+            storyOrder = [];
+            (data.users || []).forEach((entry) => {
+                storiesByUser[entry.user_id] = entry;
+                storyOrder.push(entry.user_id);
+            });
+            renderStoriesBar();
+        } catch (err) {
+            // Stories sit on top of the core chat experience — fail quietly
+            // rather than blocking the rest of the page.
+        }
+    }
+
+    function renderStoriesBar() {
+        storiesBar.innerHTML = "";
+        storyOrder.forEach((userId) => {
+            const entry = storiesByUser[userId];
+            if (!entry) return;
+            const isOwn = userId === CURRENT_USER_ID;
+            const hasStories = entry.stories.length > 0;
+            const allSeen = hasStories && entry.stories.every((s) => viewedStoryIds.has(s.id));
+
+            const ring = document.createElement("button");
+            ring.className = "story-ring";
+            ring.type = "button";
+            ring.dataset.userId = userId;
+            ring.title = isOwn ? "Your story" : (entry.full_name || entry.username);
+            ring.innerHTML = `
+                <span class="story-ring-avatar ${hasStories ? (allSeen ? "story-ring-seen" : "story-ring-unseen") : "story-ring-empty"}">
+                    <img src="/static/uploads/${entry.profile_pic}" alt="${escapeHtml(entry.full_name || entry.username)}">
+                    ${isOwn ? '<span class="story-add-badge" title="Add to your story">+</span>' : ""}
+                </span>
+                <span class="story-ring-label">${isOwn ? "Your story" : escapeHtml((entry.full_name || entry.username || "").split(" ")[0])}</span>`;
+            storiesBar.appendChild(ring);
+        });
+    }
+
+    storiesBar.addEventListener("click", (e) => {
+        const addBadge = e.target.closest(".story-add-badge");
+        if (addBadge) {
+            e.stopPropagation();
+            storyPhotoInput.click();
+            return;
+        }
+        const ring = e.target.closest(".story-ring");
+        if (!ring) return;
+        const userId = parseInt(ring.dataset.userId, 10);
+        const entry = storiesByUser[userId];
+        if (!entry) return;
+        if (!entry.stories.length) {
+            if (userId === CURRENT_USER_ID) storyPhotoInput.click();
+            return;
+        }
+        openStoryViewer(userId, 0);
+    });
+
+    function showStoryStatus(text, isError) {
+        storyUploadStatus.textContent = text;
+        storyUploadStatus.hidden = false;
+        storyUploadStatus.classList.toggle("photo-upload-status-error", !!isError);
+    }
+    function hideStoryStatus() {
+        storyUploadStatus.hidden = true;
+        storyUploadStatus.classList.remove("photo-upload-status-error");
+    }
+
+    storyPhotoInput.addEventListener("change", async () => {
+        const file = storyPhotoInput.files && storyPhotoInput.files[0];
+        if (!file) return;
+
+        if (!STORY_ALLOWED_TYPES.includes(file.type)) {
+            showStoryStatus("Unsupported file type. Use PNG, JPG, GIF, or WEBP.", true);
+            storyPhotoInput.value = "";
+            return;
+        }
+        if (file.size > STORY_MAX_BYTES) {
+            showStoryStatus("That photo is too large. Max 5 MB.", true);
+            storyPhotoInput.value = "";
+            return;
+        }
+
+        showStoryStatus("Posting your story…", false);
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const res = await fetch("/api/stories", { method: "POST", body: formData });
+            const data = await res.json();
+            if (!res.ok) {
+                showStoryStatus(data.error || "Could not post your story.", true);
+                return;
+            }
+            hideStoryStatus();
+            // The server also broadcasts this over Socket.IO ("new_story"),
+            // including back to this tab's own room, so the bar updates
+            // itself from that event — no need to render it twice here.
+        } catch (err) {
+            showStoryStatus("Network error. Please try again.", true);
+        } finally {
+            storyPhotoInput.value = "";
+        }
+    });
+
+    // -----------------------------------------------------------
+    // Viewer — full-screen, auto-advancing every STORY_SLIDE_MS
+    // -----------------------------------------------------------
+    function formatStoryTimeLeft(expiresIso) {
+        const diffMs = new Date(expiresIso).getTime() - Date.now();
+        if (diffMs <= 0) return "Expired";
+        const hours = Math.floor(diffMs / 3600000);
+        if (hours >= 1) return `${hours}h left`;
+        return `${Math.max(1, Math.round(diffMs / 60000))}m left`;
+    }
+
+    function clearStoryTimer() {
+        if (storyTimer) {
+            clearTimeout(storyTimer);
+            storyTimer = null;
+        }
+    }
+
+    function buildProgressSegments(count) {
+        storyProgressRow.innerHTML = "";
+        for (let i = 0; i < count; i++) {
+            storyProgressRow.insertAdjacentHTML(
+                "beforeend",
+                '<span class="story-progress-seg"><span class="story-progress-fill"></span></span>'
+            );
+        }
+    }
+
+    function setProgressState(index) {
+        storyProgressRow.querySelectorAll(".story-progress-seg").forEach((seg, i) => {
+            const fill = seg.querySelector(".story-progress-fill");
+            fill.style.transition = "none";
+            fill.style.width = i < index ? "100%" : "0%";
+        });
+    }
+
+    function runProgressFill(index) {
+        const segs = storyProgressRow.querySelectorAll(".story-progress-seg");
+        const fill = segs[index] && segs[index].querySelector(".story-progress-fill");
+        if (!fill) return;
+        void fill.offsetWidth; // force reflow so the transition below animates from 0
+        fill.style.transition = `width ${STORY_SLIDE_MS}ms linear`;
+        fill.style.width = "100%";
+    }
+
+    function openStoryViewer(userId, startIndex) {
+        const entry = storiesByUser[userId];
+        if (!entry || !entry.stories.length) return;
+
+        viewingUserId = userId;
+        storyViewerAvatar.src = `/static/uploads/${entry.profile_pic}`;
+        storyViewerName.textContent = userId === CURRENT_USER_ID ? "Your story" : (entry.full_name || entry.username);
+
+        buildProgressSegments(entry.stories.length);
+        storyViewerBackdrop.hidden = false;
+        document.addEventListener("keydown", handleStoryKeydown);
+        showStoryAt(Math.min(Math.max(startIndex || 0, 0), entry.stories.length - 1));
+    }
+
+    function showStoryAt(index) {
+        const entry = storiesByUser[viewingUserId];
+        if (!entry || index < 0 || index >= entry.stories.length) {
+            closeStoryViewer();
+            return;
+        }
+        viewingIndex = index;
+        const story = entry.stories[index];
+        viewedStoryIds.add(story.id);
+
+        storyViewerImage.src = story.image_url;
+        storyViewerTime.textContent = formatStoryTimeLeft(story.expires_at);
+        setProgressState(index);
+
+        const isOwn = viewingUserId === CURRENT_USER_ID;
+        storyDeleteBtn.hidden = !isOwn;
+        storyLoveBtn.hidden = isOwn;
+        storyReactorsBtn.hidden = !isOwn;
+        if (isOwn) {
+            storyReactorsCount.textContent = story.reaction_count;
+        } else {
+            storyLoveBtn.classList.toggle("story-love-active", !!story.reacted_by_me);
+        }
+        storyReactorsPanel.hidden = true;
+
+        renderStoriesBar(); // reflect the newly-seen ring right away
+
+        storyPaused = false;
+        clearStoryTimer();
+        requestAnimationFrame(() => runProgressFill(index));
+        storyTimer = setTimeout(() => advanceStory(1), STORY_SLIDE_MS);
+    }
+
+    function advanceStory(direction) {
+        const entry = storiesByUser[viewingUserId];
+        if (!entry) { closeStoryViewer(); return; }
+
+        const nextIndex = viewingIndex + direction;
+        if (nextIndex >= 0 && nextIndex < entry.stories.length) {
+            showStoryAt(nextIndex);
+            return;
+        }
+
+        // Ran off the end of this person's stories — hop to the next/previous
+        // person in the bar who still has active stories, instead of just
+        // stopping (matches the familiar stories-viewer pattern).
+        const idx = storyOrder.indexOf(viewingUserId);
+        let cursor = idx + direction;
+        while (cursor >= 0 && cursor < storyOrder.length) {
+            const candidate = storiesByUser[storyOrder[cursor]];
+            if (candidate && candidate.stories.length) {
+                openStoryViewer(candidate.user_id, direction > 0 ? 0 : candidate.stories.length - 1);
+                return;
+            }
+            cursor += direction;
+        }
+        closeStoryViewer();
+    }
+
+    function closeStoryViewer() {
+        clearStoryTimer();
+        storyViewerBackdrop.hidden = true;
+        storyViewerImage.src = "";
+        storyReactorsPanel.hidden = true;
+        viewingUserId = null;
+        document.removeEventListener("keydown", handleStoryKeydown);
+        renderStoriesBar();
+    }
+
+    function handleStoryKeydown(e) {
+        if (e.key === "Escape") closeStoryViewer();
+        else if (e.key === "ArrowRight") advanceStory(1);
+        else if (e.key === "ArrowLeft") advanceStory(-1);
+    }
+
+    storyViewerCloseBtn.addEventListener("click", closeStoryViewer);
+    storyViewerBackdrop.addEventListener("click", (e) => {
+        if (e.target === storyViewerBackdrop) closeStoryViewer();
+    });
+    storyPrevBtn.addEventListener("click", () => advanceStory(-1));
+    storyNextBtn.addEventListener("click", () => advanceStory(1));
+
+    // Pause auto-advance while the photo is pressed/held, resume on release,
+    // so someone can actually linger on a story instead of it always racing
+    // ahead after five seconds.
+    function pauseStory() {
+        if (storyPaused || storyViewerBackdrop.hidden) return;
+        storyPaused = true;
+        clearStoryTimer();
+        const segs = storyProgressRow.querySelectorAll(".story-progress-seg");
+        const fill = segs[viewingIndex] && segs[viewingIndex].querySelector(".story-progress-fill");
+        if (fill) {
+            const computedWidth = getComputedStyle(fill).width;
+            fill.style.transition = "none";
+            fill.style.width = computedWidth;
+        }
+    }
+    function resumeStory() {
+        if (!storyPaused || storyViewerBackdrop.hidden) return;
+        storyPaused = false;
+        showStoryAt(viewingIndex); // simplest correct resume: restart this slide's timer
+    }
+    storyViewerStage.addEventListener("pointerdown", pauseStory);
+    document.addEventListener("pointerup", resumeStory);
+
+    storyLoveBtn.addEventListener("click", () => {
+        const entry = storiesByUser[viewingUserId];
+        const story = entry && entry.stories[viewingIndex];
+        if (!story || viewingUserId === CURRENT_USER_ID) return;
+
+        storyLoveBtn.disabled = true;
+        fetch(`/api/stories/${story.id}/react`, { method: "POST" })
+            .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+            .then(({ ok, data }) => {
+                if (!ok) return;
+                story.reacted_by_me = data.reacted;
+                story.reaction_count = data.reaction_count;
+                storyLoveBtn.classList.toggle("story-love-active", data.reacted);
+            })
+            .catch(() => {})
+            .finally(() => { storyLoveBtn.disabled = false; });
+    });
+
+    storyDeleteBtn.addEventListener("click", async () => {
+        const entry = storiesByUser[viewingUserId];
+        const story = entry && entry.stories[viewingIndex];
+        if (!story) return;
+        if (!confirm("Delete this story? This can't be undone.")) return;
+
+        try {
+            await fetch(`/api/stories/${story.id}`, { method: "DELETE" });
+            // The server also broadcasts "story_deleted" back to this tab's
+            // own room, and that handler is what actually updates the UI —
+            // consistent with how sent photos/messages are handled above.
+        } catch (err) { /* the socket event, if it arrives, still cleans up */ }
+    });
+
+    storyReactorsBtn.addEventListener("click", async () => {
+        const entry = storiesByUser[viewingUserId];
+        const story = entry && entry.stories[viewingIndex];
+        if (!story) return;
+
+        if (!storyReactorsPanel.hidden) {
+            storyReactorsPanel.hidden = true;
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/stories/${story.id}/reactors`);
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!data.reactors.length) {
+                storyReactorsPanel.innerHTML = `<p class="story-reactors-empty">No one has loved this story yet.</p>`;
+            } else {
+                storyReactorsPanel.innerHTML = data.reactors.map((u) => `
+                    <span class="story-reactor-row">
+                        <span class="avatar avatar-sm"><img src="/static/uploads/${u.profile_pic}" alt="${escapeHtml(u.full_name)}"></span>
+                        <span>${escapeHtml(u.full_name)}</span>
+                        <span class="story-love-icon story-love-icon-sm">💜</span>
+                    </span>`).join("");
+            }
+            storyReactorsPanel.hidden = false;
+        } catch (err) { /* leave panel closed on failure */ }
+    });
+
+    loadStories();
 
     function buildChatRow(user) {
         const row = document.createElement("button");
@@ -1000,6 +1437,74 @@
 
     socket.on("presence_update", (payload) => {
         updatePresenceEverywhere(payload.user_id, payload.online, payload.last_seen);
+    });
+
+    // ---------------------------------------------------------------
+    // Stories — live updates so the bar / open viewer never go stale
+    // ---------------------------------------------------------------
+    socket.on("new_story", (payload) => {
+        let entry = storiesByUser[payload.user_id];
+        if (!entry) {
+            entry = {
+                user_id: payload.user_id,
+                username: payload.username,
+                full_name: payload.full_name,
+                profile_pic: payload.profile_pic,
+                stories: [],
+            };
+            storiesByUser[payload.user_id] = entry;
+            if (payload.user_id === CURRENT_USER_ID) {
+                storyOrder.unshift(payload.user_id);
+            } else {
+                storyOrder.push(payload.user_id);
+            }
+        }
+        entry.profile_pic = payload.profile_pic;
+        entry.full_name = payload.full_name;
+
+        if (!entry.stories.some((s) => s.id === payload.id)) {
+            entry.stories.push({
+                id: payload.id,
+                user_id: payload.user_id,
+                image_url: payload.image_url,
+                created_at: payload.created_at,
+                expires_at: payload.expires_at,
+                reaction_count: payload.reaction_count,
+                reacted_by_me: payload.reacted_by_me,
+            });
+        }
+        renderStoriesBar();
+    });
+
+    socket.on("story_deleted", (payload) => {
+        const entry = storiesByUser[payload.user_id];
+        if (entry) {
+            entry.stories = entry.stories.filter((s) => s.id !== payload.story_id);
+        }
+        viewedStoryIds.delete(payload.story_id);
+
+        if (viewingUserId === payload.user_id) {
+            const stillEntry = storiesByUser[payload.user_id];
+            if (stillEntry && stillEntry.stories.length) {
+                buildProgressSegments(stillEntry.stories.length);
+                showStoryAt(Math.min(viewingIndex, stillEntry.stories.length - 1));
+            } else {
+                closeStoryViewer();
+            }
+        }
+        renderStoriesBar();
+    });
+
+    socket.on("story_reacted", (payload) => {
+        // Only ever delivered to the story's own owner (see react_to_story
+        // in app.py) — always applies to one of our own stories.
+        const entry = storiesByUser[payload.user_id];
+        const story = entry && entry.stories.find((s) => s.id === payload.story_id);
+        if (story) story.reaction_count = payload.reaction_count;
+
+        if (entry && viewingUserId === payload.user_id && story === entry.stories[viewingIndex]) {
+            storyReactorsCount.textContent = payload.reaction_count;
+        }
     });
 
     // ---------------------------------------------------------------
