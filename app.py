@@ -80,11 +80,21 @@ USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_.]{3,30}$")
 # Deliberately simple RFC-5322-ish check — good enough to catch typos without
 # rejecting valid addresses the way an overly strict regex tends to.
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Accepts an optional leading "+" followed by 7-15 digits (E.164-ish range).
+# Registration/login normalize phone input by stripping spaces, hyphens,
+# and parentheses before this pattern is checked, so "(555) 123-4567" and
+# "555-123-4567" both validate the same as "5551234567".
+PHONE_PATTERN = re.compile(r"^\+?[0-9]{7,15}$")
 PASSWORD_MIN_LENGTH = 8
 MESSAGE_MAX_LENGTH = 4000
 CHAT_PHOTO_MAX_BYTES = 5 * 1024 * 1024   # mirrors MAX_CONTENT_LENGTH (Flask enforces this globally too)
 FULL_NAME_MIN_LENGTH = 1
 FULL_NAME_MAX_LENGTH = 60
+# Upper bound on how many phone numbers a single "find contacts" sync can
+# submit. A real address book rarely exceeds a few hundred entries; this
+# just keeps one request from being (ab)used to probe the whole phone
+# number keyspace in bulk.
+CONTACTS_MATCH_MAX = 1000
 
 # -------------------------------------------------------------------
 # App Configuration
@@ -175,7 +185,13 @@ class User(db.Model, UserMixin):
 
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(30), unique=True, nullable=False, index=True)
-    email = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    # A user registers with EITHER an email OR a phone number (not necessarily
+    # both), so both are nullable at the DB level — enforcing "at least one of
+    # the two is present" is done in the /api/register validation instead of
+    # a DB-level constraint, since SQLite's ALTER TABLE support makes adding a
+    # CHECK constraint to an existing table impractical for the migration below.
+    email = db.Column(db.String(255), unique=True, nullable=True, index=True)
+    phone = db.Column(db.String(20), unique=True, nullable=True, index=True)
     full_name = db.Column(db.String(FULL_NAME_MAX_LENGTH), nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     profile_pic = db.Column(db.String(255), nullable=False, default="default.png")
@@ -205,11 +221,12 @@ class User(db.Model, UserMixin):
             "full_name": self.full_name,
             "profile_pic": self.profile_pic,
         }
-        # Email is only ever included for the account's own owner (e.g. the
-        # /api/me response) — other users don't need to see each other's
-        # email addresses just to render the chat list.
+        # Email/phone are only ever included for the account's own owner (e.g.
+        # the /api/me response) — other users don't need to see each other's
+        # contact details just to render the chat list.
         if include_email:
             data["email"] = self.email
+            data["phone"] = self.phone
         if include_presence:
             online = is_user_online(self.id)
             data["online"] = online
@@ -301,6 +318,19 @@ def _ensure_schema():
         with db.engine.begin() as conn:
             conn.execute(text("ALTER TABLE users ADD COLUMN last_seen DATETIME"))
 
+    if "phone" not in existing_columns:
+        logger.info("Migrating users table: adding 'phone' column")
+        with db.engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(20)"))
+            # SQLite has no easy way to add a UNIQUE constraint to an existing
+            # column via ALTER TABLE, but a plain index is enough to keep phone
+            # lookups (login/registration uniqueness checks) fast; uniqueness
+            # itself is already enforced in application code at registration.
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone_unique "
+                "ON users (phone) WHERE phone IS NOT NULL"
+            ))
+
     if "messages" in inspector.get_table_names():
         existing_message_columns = {col["name"] for col in inspector.get_columns("messages")}
 
@@ -355,6 +385,18 @@ def validate_password(password):
 def validate_email(email):
     if not email or len(email) > 255 or not EMAIL_PATTERN.match(email):
         return "Please enter a valid email address."
+    return None
+
+
+def normalize_phone(phone):
+    """Strips spaces, hyphens, and parentheses so "(555) 123-4567" and
+    "555-123-4567" are treated as the same number as "5551234567"."""
+    return re.sub(r"[\s\-()]", "", phone or "")
+
+
+def validate_phone(phone):
+    if not phone or not PHONE_PATTERN.match(phone):
+        return "Please enter a valid phone number."
     return None
 
 
@@ -555,17 +597,42 @@ def register():
     data = request.get_json(silent=True) or request.form
 
     username = (data.get("username") or "").strip()
-    email = (data.get("email") or "").strip().lower()
     full_name = (data.get("full_name") or "").strip()
     password = data.get("password") or ""
+
+    # The client tells us which contact method it's collecting so we know
+    # which single field to validate/store — but we don't actually trust
+    # that label on its own; whichever of email/phone was actually filled
+    # in wins, and it's an error if both or neither were provided.
+    contact_method = (data.get("contact_method") or "").strip().lower()
+    email_raw = (data.get("email") or "").strip().lower()
+    phone_raw = normalize_phone(data.get("phone") or "")
+
+    if contact_method not in ("email", "phone"):
+        # Infer from whichever field is actually filled in, so older clients
+        # that only ever sent "email" keep working unchanged.
+        contact_method = "phone" if phone_raw and not email_raw else "email"
+
+    if email_raw and phone_raw:
+        return jsonify({"error": "Please register with either an email or a phone number, not both."}), 400
+
+    email = None
+    phone = None
+
+    if contact_method == "phone":
+        phone_error = validate_phone(phone_raw)
+        if phone_error:
+            return jsonify({"error": phone_error}), 400
+        phone = phone_raw
+    else:
+        email_error = validate_email(email_raw)
+        if email_error:
+            return jsonify({"error": email_error}), 400
+        email = email_raw
 
     username_error = validate_username(username)
     if username_error:
         return jsonify({"error": username_error}), 400
-
-    email_error = validate_email(email)
-    if email_error:
-        return jsonify({"error": email_error}), 400
 
     full_name_error = validate_full_name(full_name)
     if full_name_error:
@@ -580,11 +647,16 @@ def register():
     if User.query.filter(func.lower(User.username) == username.lower()).first():
         return jsonify({"error": "Username already taken."}), 409
 
-    if User.query.filter(func.lower(User.email) == email).first():
+    if email and User.query.filter(func.lower(User.email) == email).first():
         return jsonify({"error": "An account with that email already exists."}), 409
 
+    if phone and User.query.filter(User.phone == phone).first():
+        return jsonify({"error": "An account with that phone number already exists."}), 409
+
     try:
-        user = User(username=username, email=email, full_name=full_name)
+        # No OTP/verification step — the account is created and usable
+        # immediately from the email/phone number as entered.
+        user = User(username=username, email=email, phone=phone, full_name=full_name)
         user.set_password(password)
         db.session.add(user)
         db.session.commit()
@@ -604,9 +676,10 @@ def login():
     data = request.get_json(silent=True) or request.form
 
     identifier = (data.get("username") or "").strip()
+    identifier_phone = normalize_phone(identifier)
     password = data.get("password") or ""
 
-    # Accept either a username or an email address in the same field, so
+    # Accept a username, email address, or phone number in the same field, so
     # people who forget which one they registered with can still log in.
     # Generic error message on both bad-identifier and bad-password paths,
     # so the response can't be used to enumerate valid accounts.
@@ -614,6 +687,7 @@ def login():
         db.or_(
             func.lower(User.username) == identifier.lower(),
             func.lower(User.email) == identifier.lower(),
+            User.phone == identifier_phone,
         )
     ).first()
     if not user or not user.check_password(password):
@@ -735,6 +809,66 @@ def search_users():
 
     return jsonify({
         "users": [u.to_dict(include_presence=True) for u in matches]
+    }), 200
+
+
+@app.route("/api/contacts/match", methods=["POST"])
+@login_required
+@limiter.limit("15 per hour")
+def match_contacts():
+    """Given a batch of phone numbers pulled from the device's address book
+    (via the browser's Contact Picker, on the client side), returns whichever
+    of them belong to a registered Zoble account — this is what powers "find
+    people from your phone contacts", the same way Telegram/WhatsApp cross-
+    reference your address book against their user directory.
+
+    Only numbers that already match a real account come back. Nothing about
+    the other phone numbers is created, stored, or otherwise persisted
+    server-side — each submitted number is only ever compared in-memory for
+    the duration of this request, never logged, and the response never
+    reveals *which* submitted number matched a given account (just the
+    account itself), since the client already knows which of its own
+    contacts it sent.
+    """
+    data = request.get_json(silent=True) or {}
+    phones = data.get("phones")
+
+    if not isinstance(phones, list):
+        return jsonify({"error": "'phones' must be a list of phone number strings."}), 400
+
+    if len(phones) > CONTACTS_MATCH_MAX:
+        return jsonify({
+            "error": f"Too many contacts in one request (max {CONTACTS_MATCH_MAX})."
+        }), 400
+
+    # Normalize the same way registration/login do, so "(555) 123-4567" in
+    # someone's address book matches the "5551234567" they registered with.
+    # Non-strings and anything that still fails the phone pattern after
+    # normalizing are silently dropped rather than erroring the whole
+    # request — a real address book is full of entries with no phone number,
+    # extensions, or garbage formatting.
+    normalized = set()
+    for raw in phones:
+        if not isinstance(raw, str):
+            continue
+        candidate = normalize_phone(raw)
+        if PHONE_PATTERN.match(candidate):
+            normalized.add(candidate)
+
+    matches = []
+    if normalized:
+        matches = (
+            User.query.filter(
+                User.id != current_user.id,
+                User.phone.in_(normalized),
+            )
+            .order_by(User.full_name.asc())
+            .all()
+        )
+
+    return jsonify({
+        "matches": [u.to_dict(include_presence=True) for u in matches],
+        "checked": len(normalized),
     }), 200
 
 
