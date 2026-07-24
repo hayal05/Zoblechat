@@ -437,6 +437,7 @@ a:focus-visible {
     100% { transform: scale(1); }
 }
 .sidebar-footer {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -468,6 +469,61 @@ a:focus-visible {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+.profile-menu-chevron {
+    flex-shrink: 0;
+    color: var(--ink-faint);
+    transition: transform 0.15s var(--ease);
+}
+.sidebar-footer-identity[aria-expanded="true"] .profile-menu-chevron {
+    transform: rotate(180deg);
+}
+
+/* Popover menu that opens off the profile icon — this is where "Edit
+   profile" and "Log out" live, instead of a bare icon sitting in the open. */
+.profile-menu {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: calc(100% + 8px);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-plate-lg);
+    padding: 6px;
+    z-index: 20;
+    animation: profile-menu-in 0.15s var(--ease);
+}
+@keyframes profile-menu-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.profile-menu[hidden] { display: none; }
+.profile-menu-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: transparent;
+    border: none;
+    padding: 9px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s var(--ease);
+}
+.profile-menu-item:hover { background: var(--canvas); }
+.profile-menu-item svg { flex-shrink: 0; color: var(--ink-soft); }
+.profile-menu-item-danger { color: #DC2626; }
+.profile-menu-item-danger svg { color: #DC2626; }
+.profile-menu-item-danger:hover { background: #FEF2F2; }
+.profile-menu-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 6px;
 }
 
 /* ---------------------------------------------------------------------
@@ -527,6 +583,12 @@ a:focus-visible {
     gap: 1px;
     min-width: 0;
 }
+.chat-header-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
 .chat-header-name {
     font-weight: 700;
     font-size: 16.5px;
@@ -535,6 +597,19 @@ a:focus-visible {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+.chat-header-badge {
+    flex-shrink: 0;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--brand-dark);
+    background: var(--brand-tint);
+    border: 1px solid var(--brand-tint-strong);
+    border-radius: var(--radius-full);
+    padding: 2px 8px;
+    white-space: nowrap;
 }
 .chat-header-status {
     font-size: 12.5px;
