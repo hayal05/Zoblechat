@@ -21,34 +21,75 @@
             </span>
         </div>
 
-        <div class="search-box">
-            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="11" cy="11" r="8"></circle>
-                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-            <input type="text" id="userSearchInput" class="search-input" placeholder="Search people by name…" autocomplete="off">
-            <button class="search-clear" id="userSearchClear" type="button" title="Clear search" hidden>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="18" y1="6" x2="6" y2="18"></line>
-                    <line x1="6" y1="6" x2="18" y2="18"></line>
+        <div class="sidebar-topbar">
+            <div class="search-box">
+                <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                 </svg>
-            </button>
+                <input type="text" id="userSearchInput" class="search-input" placeholder="Search people by name…" autocomplete="off">
+                <button class="search-clear" id="userSearchClear" type="button" title="Clear search" hidden>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Profile now lives top-right, level with the search bar -->
+            <div class="profile-avatar-wrap">
+                <button class="profile-avatar-btn" id="profileMenuBtn" type="button" title="Account menu" aria-haspopup="true" aria-expanded="false">
+                    <span class="avatar avatar-sm" id="ownAvatarWrap">
+                        <img id="ownAvatar" src="{{ url_for('static', filename='uploads/' ~ current_user_data.profile_pic) }}" alt="Your avatar">
+                    </span>
+                </button>
+
+                <!-- Popover menu anchored to the profile icon: edit profile + log out -->
+                <div class="profile-menu profile-menu-top" id="profileMenu" hidden>
+                    <div class="profile-menu-header">
+                        <span class="avatar avatar-sm">
+                            <img src="{{ url_for('static', filename='uploads/' ~ current_user_data.profile_pic) }}" alt="Your avatar">
+                        </span>
+                        <span class="profile-menu-header-name" id="ownFullName">{{ current_user_data.full_name }}</span>
+                    </div>
+                    <div class="profile-menu-divider"></div>
+                    <button class="profile-menu-item" id="openProfileBtn" type="button">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                        </svg>
+                        <span>Edit profile</span>
+                    </button>
+                    <div class="profile-menu-divider"></div>
+                    <button class="profile-menu-item profile-menu-item-danger" id="logoutBtn" type="button">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                            <polyline points="16 17 21 12 16 7"></polyline>
+                            <line x1="21" y1="12" x2="9" y2="12"></line>
+                        </svg>
+                        <span>Log out</span>
+                    </button>
+                </div>
+            </div>
         </div>
 
-        <button class="contacts-sync-row" id="findContactsBtn" type="button">
-            <span class="contacts-sync-icon">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                    <circle cx="9" cy="7" r="4"></circle>
-                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+        <!-- Chats / Online contacts — side by side, icon-led tabs -->
+        <div class="view-tabs" id="viewTabs">
+            <button class="view-tab active" id="chatsTabBtn" type="button" data-view="chats">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                 </svg>
-            </span>
-            <span class="contacts-sync-label">Find contacts on Zoble</span>
-            <svg class="contacts-sync-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="9 18 15 12 9 6"></polyline>
-            </svg>
-        </button>
+                <span>Chats</span>
+            </button>
+            <button class="view-tab" id="onlineTabBtn" type="button" data-view="online">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="8" r="4"></circle>
+                    <path d="M4 21v-1a8 8 0 0 1 16 0v1"></path>
+                </svg>
+                <span>Online</span>
+                <span class="tab-count" id="onlineCount" hidden></span>
+            </button>
+        </div>
 
         <div class="chat-list" id="chatList">
             {% if users %}
@@ -80,37 +121,17 @@
             <!-- Populated by JS while the user is searching -->
         </div>
 
-        <div class="sidebar-footer">
-            <button class="sidebar-footer-identity" id="profileMenuBtn" type="button" title="Account menu" aria-haspopup="true" aria-expanded="false">
-                <span class="avatar avatar-sm" id="ownAvatarWrap">
-                    <img id="ownAvatar" src="{{ url_for('static', filename='uploads/' ~ current_user_data.profile_pic) }}" alt="Your avatar">
-                </span>
-                <span class="sidebar-footer-name" id="ownFullName">{{ current_user_data.full_name }}</span>
-                <svg class="profile-menu-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="18 15 12 9 6 15"></polyline>
-                </svg>
-            </button>
-
-            <!-- Popover menu anchored to the profile icon: edit profile + log out -->
-            <div class="profile-menu" id="profileMenu" hidden>
-                <button class="profile-menu-item" id="openProfileBtn" type="button">
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                        <circle cx="12" cy="7" r="4"></circle>
-                    </svg>
-                    <span>Edit profile</span>
-                </button>
-                <div class="profile-menu-divider"></div>
-                <button class="profile-menu-item profile-menu-item-danger" id="logoutBtn" type="button">
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-                        <polyline points="16 17 21 12 16 7"></polyline>
-                        <line x1="21" y1="12" x2="9" y2="12"></line>
-                    </svg>
-                    <span>Log out</span>
-                </button>
-            </div>
+        <div class="chat-list online-list" id="onlineList" hidden>
+            <!-- Populated by JS: everyone currently online -->
         </div>
+
+        <!-- Floating "+" button — find contacts on Zoble — bottom right -->
+        <button class="fab-add-contact" id="findContactsBtn" type="button" title="Find contacts on Zoble">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+        </button>
     </aside>
 
     <!-- ============ PROFILE MODAL ============ -->
@@ -446,7 +467,73 @@
             av.dataset.online = online ? "true" : "false";
         });
         if (userId === activeUserId) setActiveStatus(online, lastSeen);
+        renderOnlineList();
     }
+
+    // ---------------------------------------------------------------
+    // Chats / Online contacts tabs — side-by-side switcher above the list
+    // ---------------------------------------------------------------
+    const viewTabs = document.getElementById("viewTabs");
+    const onlineList = document.getElementById("onlineList");
+    const onlineCountEl = document.getElementById("onlineCount");
+    let currentView = "chats";
+
+    function renderOnlineList() {
+        const onlineUsers = Object.values(knownUsers)
+            .filter((u) => u.online && u.id !== CURRENT_USER_ID)
+            .sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
+
+        onlineCountEl.textContent = onlineUsers.length;
+        onlineCountEl.hidden = onlineUsers.length === 0;
+
+        if (!onlineList.hidden) {
+            if (!onlineUsers.length) {
+                onlineList.innerHTML = `<p class="chat-list-empty">Nobody's online right now.</p>`;
+            } else {
+                onlineList.innerHTML = "";
+                onlineUsers.forEach((u) => {
+                    const row = buildChatRow(u);
+                    row.querySelector(".chat-row-preview").textContent = "Online now";
+                    if (u.id === activeUserId) row.classList.add("active");
+                    onlineList.appendChild(row);
+                });
+            }
+        }
+    }
+
+    function setView(view) {
+        currentView = view;
+        viewTabs.querySelectorAll(".view-tab").forEach((t) => {
+            t.classList.toggle("active", t.dataset.view === view);
+        });
+        if (!searchResults.hidden) {
+            searchInput.value = "";
+            searchClearBtn.hidden = true;
+        }
+        searchResults.hidden = true;
+        if (view === "online") {
+            chatList.hidden = true;
+            onlineList.hidden = false;
+            renderOnlineList();
+        } else {
+            onlineList.hidden = true;
+            chatList.hidden = false;
+        }
+    }
+
+    viewTabs.addEventListener("click", (e) => {
+        const btn = e.target.closest(".view-tab");
+        if (!btn) return;
+        setView(btn.dataset.view);
+    });
+
+    onlineList.addEventListener("click", (e) => {
+        const row = e.target.closest(".chat-row");
+        if (!row) return;
+        openConversationForId(parseInt(row.dataset.userId, 10));
+    });
+
+    renderOnlineList(); // seed the count badge on load
 
     function bumpUnreadBadge(userId) {
         const row = chatList.querySelector(`.chat-row[data-user-id="${userId}"]`);
@@ -481,9 +568,9 @@
 
     async function openConversationForId(userId) {
         document.querySelectorAll(".chat-row.active").forEach(r => r.classList.remove("active"));
+        document.querySelectorAll(`.chat-row[data-user-id="${userId}"]`).forEach(r => r.classList.add("active"));
         const row = chatList.querySelector(`.chat-row[data-user-id="${userId}"]`);
         if (row) {
-            row.classList.add("active");
             const badge = row.querySelector(".unread-badge");
             if (badge) badge.remove();
         }
@@ -539,12 +626,19 @@
     // ---------------------------------------------------------------
     function showSearchResults() {
         chatList.hidden = true;
+        onlineList.hidden = true;
         searchResults.hidden = false;
     }
 
     function showConversationList() {
         searchResults.hidden = true;
-        chatList.hidden = false;
+        if (currentView === "online") {
+            onlineList.hidden = false;
+            chatList.hidden = true;
+        } else {
+            chatList.hidden = false;
+            onlineList.hidden = true;
+        }
     }
 
     function renderSearchResults(users) {
