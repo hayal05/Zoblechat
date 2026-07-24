@@ -169,6 +169,12 @@
             </div>
 
             <footer class="chat-input-bar">
+                <label class="btn-icon btn-attach" for="photoInput" title="Send a photo">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+                    </svg>
+                </label>
+                <input type="file" id="photoInput" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
                 <textarea id="messageInput" class="message-input" placeholder="Write a message…" rows="1"></textarea>
                 <button class="btn-send" id="sendBtn" type="button" title="Send">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -177,8 +183,20 @@
                     </svg>
                 </button>
             </footer>
+            <p class="photo-upload-status" id="photoUploadStatus" hidden></p>
         </div>
     </main>
+
+    <!-- ============ PHOTO LIGHTBOX ============ -->
+    <div class="modal-backdrop lightbox-backdrop" id="lightboxBackdrop" hidden>
+        <button class="btn-icon lightbox-close" id="lightboxCloseBtn" title="Close" type="button">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+        </button>
+        <img class="lightbox-image" id="lightboxImage" src="" alt="Shared photo">
+    </div>
 </div>
 
 <script>
@@ -249,17 +267,56 @@
         messagesScroll.scrollTo({ top: messagesScroll.scrollHeight, behavior: smooth ? "smooth" : "auto" });
     }
 
+    function messagePreviewText(msg) {
+        return msg.message_type === "image" ? "📷 Photo" : msg.content;
+    }
+
     function appendMessage(msg, animate) {
         const outgoing = msg.sender_id === CURRENT_USER_ID;
         const row = document.createElement("div");
         row.className = "msg-row " + (outgoing ? "outgoing" : "incoming") + (animate ? " msg-enter" : "");
-        row.innerHTML = `
-            <div class="msg-bubble">
-                ${escapeHtml(msg.content)}
-                <span class="msg-time">${formatTime(msg.timestamp)}</span>
-            </div>`;
+
+        if (msg.message_type === "image" && msg.image_url) {
+            row.innerHTML = `
+                <div class="msg-bubble msg-bubble-photo">
+                    <img class="msg-photo" src="${msg.image_url}" alt="Shared photo" loading="lazy">
+                    <span class="msg-time msg-time-photo">${formatTime(msg.timestamp)}</span>
+                </div>`;
+            row.querySelector(".msg-photo").addEventListener("click", () => openLightbox(msg.image_url));
+        } else {
+            row.innerHTML = `
+                <div class="msg-bubble">
+                    ${escapeHtml(msg.content)}
+                    <span class="msg-time">${formatTime(msg.timestamp)}</span>
+                </div>`;
+        }
         messagesScroll.appendChild(row);
     }
+
+    // ---------------------------------------------------------------
+    // Photo lightbox — tap any shared photo to view it full-size
+    // ---------------------------------------------------------------
+    const lightboxBackdrop = document.getElementById("lightboxBackdrop");
+    const lightboxImage = document.getElementById("lightboxImage");
+    const lightboxCloseBtn = document.getElementById("lightboxCloseBtn");
+
+    function openLightbox(src) {
+        lightboxImage.src = src;
+        lightboxBackdrop.hidden = false;
+    }
+
+    function closeLightbox() {
+        lightboxBackdrop.hidden = true;
+        lightboxImage.src = "";
+    }
+
+    lightboxCloseBtn.addEventListener("click", closeLightbox);
+    lightboxBackdrop.addEventListener("click", (e) => {
+        if (e.target === lightboxBackdrop) closeLightbox();
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !lightboxBackdrop.hidden) closeLightbox();
+    });
 
     function buildChatRow(user) {
         const row = document.createElement("button");
@@ -543,6 +600,77 @@
     });
 
     // ---------------------------------------------------------------
+    // Photo sharing — pick a file, upload it, server broadcasts the
+    // resulting message over Socket.IO to both sides (see socket.on
+    // "receive_message" below), so we don't render it locally here —
+    // that avoids ever showing it twice.
+    // ---------------------------------------------------------------
+    const photoInput = document.getElementById("photoInput");
+    const photoUploadStatus = document.getElementById("photoUploadStatus");
+    const ALLOWED_PHOTO_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+    const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+
+    function showPhotoStatus(text, isError) {
+        photoUploadStatus.textContent = text;
+        photoUploadStatus.hidden = false;
+        photoUploadStatus.classList.toggle("photo-upload-status-error", !!isError);
+    }
+
+    function hidePhotoStatus() {
+        photoUploadStatus.hidden = true;
+        photoUploadStatus.classList.remove("photo-upload-status-error");
+    }
+
+    photoInput.addEventListener("change", async () => {
+        const file = photoInput.files && photoInput.files[0];
+        if (!file) return;
+
+        if (!activeUserId) {
+            photoInput.value = "";
+            return;
+        }
+
+        if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+            showPhotoStatus("Unsupported file type. Use PNG, JPG, GIF, or WEBP.", true);
+            photoInput.value = "";
+            return;
+        }
+        if (file.size > MAX_PHOTO_BYTES) {
+            showPhotoStatus("That photo is too large. Max 5 MB.", true);
+            photoInput.value = "";
+            return;
+        }
+
+        showPhotoStatus("Sending photo…", false);
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const res = await fetch(`/api/messages/${activeUserId}/photo`, {
+                method: "POST",
+                body: formData,
+            });
+            const data = await res.json();
+
+            if (!res.ok) {
+                showPhotoStatus(data.error || "Could not send photo.", true);
+                return;
+            }
+
+            hidePhotoStatus();
+            // The server already broadcast this message over Socket.IO to
+            // both parties' rooms (including this tab's own room), so the
+            // "receive_message" handler below will render it — no need to
+            // append it a second time here.
+        } catch (err) {
+            showPhotoStatus("Network error. Please try again.", true);
+        } finally {
+            photoInput.value = "";
+        }
+    });
+
+    // ---------------------------------------------------------------
     // Socket.IO
     // ---------------------------------------------------------------
     const socket = io({ transports: ["websocket", "polling"] });
@@ -574,7 +702,7 @@
         }
 
         const otherPartyId = msg.sender_id === CURRENT_USER_ID ? msg.recipient_id : msg.sender_id;
-        setRowPreview(otherPartyId, (msg.sender_id === CURRENT_USER_ID ? "You: " : "") + msg.content);
+        setRowPreview(otherPartyId, (msg.sender_id === CURRENT_USER_ID ? "You: " : "") + messagePreviewText(msg));
 
         if (!isOpenConversation && msg.sender_id !== CURRENT_USER_ID) {
             bumpUnreadBadge(msg.sender_id);
