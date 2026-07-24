@@ -269,6 +269,7 @@ a:focus-visible {
    Sidebar — white plate panel, clear border against the canvas
    --------------------------------------------------------------------- */
 .sidebar {
+    position: relative;
     width: 320px;
     flex-shrink: 0;
     background: var(--surface);
@@ -315,6 +316,29 @@ a:focus-visible {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.35; }
 }
+/* Top bar: search box + profile avatar, side by side, right above the tabs */
+.sidebar-topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 16px 4px;
+}
+.sidebar-topbar .search-box { margin: 0; flex: 1; min-width: 0; }
+
+.profile-avatar-wrap { position: relative; flex-shrink: 0; }
+.profile-avatar-btn {
+    display: flex;
+    border: none;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    border-radius: 50%;
+    transition: box-shadow 0.15s var(--ease), transform 0.1s var(--ease);
+}
+.profile-avatar-btn:hover { box-shadow: 0 0 0 3px var(--brand-tint); }
+.profile-avatar-btn:active { transform: scale(0.94); }
+.profile-avatar-btn[aria-expanded="true"] { box-shadow: 0 0 0 3px var(--brand-tint-strong); }
+
 .search-box {
     display: flex;
     align-items: center;
@@ -350,42 +374,83 @@ a:focus-visible {
 }
 .search-clear:hover { color: var(--ink-soft); }
 
-.contacts-sync-row {
+/* Chats / Online contacts — icon-led tabs, side by side */
+.view-tabs {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    width: calc(100% - 32px);
-    margin: 4px 16px 8px;
-    padding: 10px 12px;
-    background: var(--brand-tint);
-    border: 1px solid var(--brand-tint-strong);
+    gap: 4px;
+    margin: 10px 16px 8px;
+    padding: 3px;
+    background: var(--canvas);
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    color: var(--brand-darker);
-    cursor: pointer;
-    text-align: left;
-    transition: background 0.15s var(--ease), transform 0.1s var(--ease);
 }
-.contacts-sync-row:hover { background: var(--brand-tint-strong); }
-.contacts-sync-row:active { transform: scale(0.99); }
-.contacts-sync-icon {
+.view-tab {
+    flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
-    flex-shrink: 0;
-}
-.contacts-sync-label {
-    flex: 1;
-    font-size: 14px;
+    gap: 7px;
+    border: none;
+    background: transparent;
+    color: var(--ink-soft);
+    font-size: 13.5px;
     font-weight: 600;
+    padding: 9px 8px;
+    border-radius: calc(var(--radius-md) - 3px);
+    cursor: pointer;
+    transition: background 0.15s var(--ease), color 0.15s var(--ease), transform 0.1s var(--ease);
 }
-.contacts-sync-chevron { flex-shrink: 0; opacity: 0.7; }
+.view-tab svg { flex-shrink: 0; }
+.view-tab:hover { color: var(--ink); }
+.view-tab:active { transform: scale(0.98); }
+.view-tab.active {
+    background: var(--surface);
+    color: var(--brand-darker);
+    box-shadow: 0 1px 2px rgba(28, 31, 38, 0.08);
+}
+.tab-count {
+    background: var(--brand);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: var(--radius-full);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.tab-count[hidden] { display: none; }
+
+/* Floating "+" button — find contacts on Zoble — bottom right of the list */
+.fab-add-contact {
+    position: absolute;
+    right: 18px;
+    bottom: 18px;
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(180deg, var(--brand) 0%, var(--brand-dark) 100%);
+    color: #fff;
+    cursor: pointer;
+    box-shadow: var(--shadow-brand);
+    z-index: 15;
+    transition: transform 0.15s var(--ease), box-shadow 0.15s var(--ease), background 0.15s var(--ease);
+}
+.fab-add-contact:hover { transform: translateY(-1px) scale(1.03); }
+.fab-add-contact:active { background: var(--brand-darker); transform: scale(0.96); box-shadow: none; }
 
 .chat-list {
     flex: 1;
     overflow-y: auto;
-    padding: 8px;
+    padding: 8px 8px 84px;
 }
-.chat-list[hidden], .search-results[hidden] { display: none; }
+.chat-list[hidden], .search-results[hidden], .online-list[hidden] { display: none; }
 .contacts-result-list {
     flex: none;
     max-height: 320px;
@@ -501,56 +566,10 @@ a:focus-visible {
     60% { transform: scale(1.15); }
     100% { transform: scale(1); }
 }
-.sidebar-footer {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 10px 10px 10px 16px;
-    border-top: 1px solid var(--border);
-    background: var(--surface);
-}
-.sidebar-footer-identity {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    background: transparent;
-    border: none;
-    padding: 6px;
-    margin: -6px;
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    text-align: left;
-    transition: background 0.15s var(--ease);
-}
-.sidebar-footer-identity:hover { background: var(--canvas); }
-.sidebar-footer-identity:active { transform: scale(0.99); }
-.sidebar-footer-name {
-    flex: 1;
-    font-weight: 600;
-    font-size: 14px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.profile-menu-chevron {
-    flex-shrink: 0;
-    color: var(--ink-faint);
-    transition: transform 0.15s var(--ease);
-}
-.sidebar-footer-identity[aria-expanded="true"] .profile-menu-chevron {
-    transform: rotate(180deg);
-}
-
-/* Popover menu that opens off the profile icon — this is where "Edit
-   profile" and "Log out" live, instead of a bare icon sitting in the open. */
+/* Popover menu that opens off the top-right profile avatar — this is where
+   "Edit profile" and "Log out" live. */
 .profile-menu {
     position: absolute;
-    left: 12px;
-    right: 12px;
-    bottom: calc(100% + 8px);
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
@@ -559,11 +578,29 @@ a:focus-visible {
     z-index: 20;
     animation: profile-menu-in 0.15s var(--ease);
 }
+.profile-menu-top {
+    top: calc(100% + 10px);
+    right: 0;
+    min-width: 210px;
+}
 @keyframes profile-menu-in {
-    from { opacity: 0; transform: translateY(4px); }
+    from { opacity: 0; transform: translateY(-4px); }
     to { opacity: 1; transform: translateY(0); }
 }
 .profile-menu[hidden] { display: none; }
+.profile-menu-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px 8px;
+}
+.profile-menu-header-name {
+    font-weight: 700;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 .profile-menu-item {
     width: 100%;
     display: flex;
