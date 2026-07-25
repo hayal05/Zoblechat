@@ -48,6 +48,16 @@
                 </button>
             </div>
 
+            <!-- News feed — opens the full-screen swipeable feed overlay -->
+            <button class="btn-icon feed-nav-btn" id="feedNavBtn" type="button" title="News feed">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                    <line x1="8" y1="8" x2="16" y2="8"></line>
+                    <line x1="8" y1="12" x2="16" y2="12"></line>
+                    <line x1="8" y1="16" x2="12" y2="16"></line>
+                </svg>
+            </button>
+
             <!-- Profile now lives top-right, level with the search bar -->
             <div class="profile-avatar-wrap">
                 <button class="profile-avatar-btn" id="profileMenuBtn" type="button" title="Account menu" aria-haspopup="true" aria-expanded="false">
@@ -484,6 +494,107 @@
 
             <!-- Who loved this story — only ever shown to the story's own owner -->
             <div class="story-reactors-panel" id="storyReactorsPanel" hidden></div>
+        </div>
+    </div>
+
+    <!-- ============ FEED (swipeable news feed) ============ -->
+    <div class="modal-backdrop feed-backdrop" id="feedBackdrop" hidden>
+        <div class="feed-viewer" id="feedViewer">
+            <header class="feed-header">
+                <span class="feed-header-title">News Feed</span>
+                <button class="btn-icon feed-close" id="feedCloseBtn" title="Close" type="button">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </header>
+
+            <!-- Horizontal scroll-snap track — native touch swipe (left/right)
+                 moves between posts; loadMorePosts() extends it as the user
+                 nears the end. -->
+            <div class="feed-track" id="feedTrack"></div>
+
+            <div class="feed-empty" id="feedEmpty" hidden>
+                <p>No posts yet.</p>
+                <p class="feed-empty-sub">Be the first to post something.</p>
+            </div>
+
+            <!-- Desktop-only prev/next arrows; touch users just swipe -->
+            <button class="feed-arrow feed-arrow-prev" id="feedPrevBtn" type="button" aria-label="Previous post" hidden></button>
+            <button class="feed-arrow feed-arrow-next" id="feedNextBtn" type="button" aria-label="Next post" hidden></button>
+
+            <button class="feed-compose-fab" id="feedComposeFab" type="button" title="New post">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+            </button>
+
+            <!-- Comments drawer — slides up over the current card -->
+            <div class="feed-comments-drawer" id="feedCommentsDrawer" hidden>
+                <div class="feed-comments-handle-row">
+                    <span class="feed-comments-title">Comments</span>
+                    <button class="btn-icon feed-comments-close" id="feedCommentsCloseBtn" type="button" title="Close comments">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+                <div class="feed-comments-list" id="feedCommentsList"></div>
+                <form class="feed-comment-form" id="feedCommentForm">
+                    <input type="text" id="feedCommentInput" class="feed-comment-input" placeholder="Write a comment…" maxlength="500" autocomplete="off">
+                    <button type="submit" class="feed-comment-send" title="Send">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ FEED COMPOSE MODAL ============ -->
+    <div class="modal-backdrop" id="feedComposeBackdrop" hidden>
+        <div class="modal-card feed-compose-card">
+            <div class="modal-header">
+                <h3>New post</h3>
+                <button class="btn-icon" id="feedComposeCloseBtn" type="button" title="Close">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <form id="feedComposeForm">
+                <div class="modal-body">
+                    <textarea id="feedComposeText" class="feed-compose-textarea" placeholder="Share something…" maxlength="2000" rows="4"></textarea>
+                    <div class="feed-compose-preview-wrap" id="feedComposePreviewWrap" hidden>
+                        <img id="feedComposePreviewImg" alt="Selected photo preview">
+                        <button type="button" class="feed-compose-remove-photo" id="feedComposeRemovePhoto" title="Remove photo">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="feed-compose-actions">
+                        <button type="button" class="btn btn-secondary feed-compose-photo-btn" id="feedComposePhotoBtn">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                                <polyline points="21 15 16 10 5 21"></polyline>
+                            </svg>
+                            <span>Photo</span>
+                        </button>
+                        <input type="file" id="feedComposePhotoInput" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+                    </div>
+                    <p class="field-error" id="feedComposeStatus" hidden></p>
+                    <button type="submit" class="btn btn-primary btn-block" id="feedComposeSubmitBtn">Post</button>
+                </div>
+            </form>
         </div>
     </div>
 </div>
@@ -1241,6 +1352,462 @@
     });
 
     loadStories();
+
+    // ---------------------------------------------------------------
+    // News feed — a full-screen, horizontally swipeable (scroll-snap)
+    // feed of posts. Each post is text-only, photo-only, or both, and
+    // carries like/comment/share actions. Swipe left/right (or drag on
+    // desktop) moves between posts, same overlay/history-back pattern
+    // as the story viewer.
+    // ---------------------------------------------------------------
+    const feedNavBtn = document.getElementById("feedNavBtn");
+    const feedBackdrop = document.getElementById("feedBackdrop");
+    const feedTrack = document.getElementById("feedTrack");
+    const feedEmpty = document.getElementById("feedEmpty");
+    const feedCloseBtn = document.getElementById("feedCloseBtn");
+    const feedPrevBtn = document.getElementById("feedPrevBtn");
+    const feedNextBtn = document.getElementById("feedNextBtn");
+    const feedComposeFab = document.getElementById("feedComposeFab");
+    const feedCommentsDrawer = document.getElementById("feedCommentsDrawer");
+    const feedCommentsList = document.getElementById("feedCommentsList");
+    const feedCommentForm = document.getElementById("feedCommentForm");
+    const feedCommentInput = document.getElementById("feedCommentInput");
+    const feedCommentsCloseBtn = document.getElementById("feedCommentsCloseBtn");
+
+    const feedComposeBackdrop = document.getElementById("feedComposeBackdrop");
+    const feedComposeCloseBtn = document.getElementById("feedComposeCloseBtn");
+    const feedComposeForm = document.getElementById("feedComposeForm");
+    const feedComposeText = document.getElementById("feedComposeText");
+    const feedComposePhotoBtn = document.getElementById("feedComposePhotoBtn");
+    const feedComposePhotoInput = document.getElementById("feedComposePhotoInput");
+    const feedComposePreviewWrap = document.getElementById("feedComposePreviewWrap");
+    const feedComposePreviewImg = document.getElementById("feedComposePreviewImg");
+    const feedComposeRemovePhoto = document.getElementById("feedComposeRemovePhoto");
+    const feedComposeStatus = document.getElementById("feedComposeStatus");
+    const feedComposeSubmitBtn = document.getElementById("feedComposeSubmitBtn");
+
+    let feedPosts = [];           // in DOM order, newest first
+    let feedHasMore = true;
+    let feedLoadingMore = false;
+    let feedLoadedOnce = false;
+    let feedComposeFile = null;
+    let activeCommentsPostId = null;
+    let feedScrollDebounce = null;
+
+    function feedTimeAgo(iso) {
+        const diffMs = Date.now() - new Date(iso).getTime();
+        const mins = Math.max(0, Math.round(diffMs / 60000));
+        if (mins < 1) return "just now";
+        if (mins < 60) return `${mins}m`;
+        const hours = Math.round(mins / 60);
+        if (hours < 24) return `${hours}h`;
+        const days = Math.round(hours / 24);
+        if (days < 7) return `${days}d`;
+        return new Date(iso).toLocaleDateString();
+    }
+
+    function likeIconSvg(filled) {
+        return `<svg width="16" height="16" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"></path>
+        </svg>`;
+    }
+
+    function buildFeedCard(post) {
+        const card = document.createElement("div");
+        card.className = "feed-card";
+        card.dataset.postId = post.id;
+
+        const isOwn = post.user_id === CURRENT_USER_ID;
+        const hasImage = !!post.image_url;
+        const hasText = !!(post.text && post.text.trim());
+
+        let mediaHtml;
+        if (hasImage) {
+            mediaHtml = `<div class="feed-card-media"><img src="${post.image_url}" alt="Post photo"></div>`;
+        } else {
+            mediaHtml = `<div class="feed-card-media feed-card-text-only"><p class="feed-card-text-big">${escapeHtml(post.text || "")}</p></div>`;
+        }
+
+        card.innerHTML = `
+            <div class="feed-card-header">
+                <span class="avatar avatar-sm"><img src="/static/uploads/${post.profile_pic}" alt="${escapeHtml(post.full_name || post.username)}"></span>
+                <span class="feed-card-identity">
+                    <span class="feed-card-name">${escapeHtml(post.full_name || post.username)}</span>
+                    <span class="feed-card-time">${feedTimeAgo(post.created_at)}</span>
+                </span>
+                <button class="btn-icon feed-card-delete" type="button" title="Delete post" ${isOwn ? "" : "hidden"}>
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                        <path d="M10 11v6"></path><path d="M14 11v6"></path>
+                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+                    </svg>
+                </button>
+            </div>
+            ${mediaHtml}
+            ${hasImage && hasText ? `<p class="feed-card-caption">${escapeHtml(post.text)}</p>` : ""}
+            <div class="feed-card-footer">
+                <button class="feed-action-btn feed-like-btn${post.liked_by_me ? " feed-liked" : ""}" type="button">
+                    ${likeIconSvg(!!post.liked_by_me)}
+                    <span class="feed-like-count">${post.like_count}</span>
+                </button>
+                <button class="feed-action-btn feed-comment-btn" type="button">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                    <span class="feed-comment-count">${post.comment_count}</span>
+                </button>
+                <button class="feed-action-btn feed-share-btn" type="button">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle>
+                        <line x1="8.6" y1="13.5" x2="15.4" y2="17.5"></line><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"></line>
+                    </svg>
+                    <span class="feed-share-count">${post.share_count}</span>
+                </button>
+            </div>`;
+        return card;
+    }
+
+    function renderFeedEmptyState() {
+        feedEmpty.hidden = feedPosts.length > 0;
+    }
+
+    async function loadFeedPage(reset) {
+        if (feedLoadingMore) return;
+        if (!reset && !feedHasMore) return;
+        feedLoadingMore = true;
+
+        if (reset) {
+            feedPosts = [];
+            feedTrack.innerHTML = "";
+            feedHasMore = true;
+        }
+
+        try {
+            const lastId = feedPosts.length ? feedPosts[feedPosts.length - 1].id : "";
+            const url = lastId ? `/api/posts?before_id=${lastId}` : "/api/posts";
+            const res = await fetch(url);
+            if (!res.ok) return;
+            const data = await res.json();
+            feedHasMore = !!data.has_more;
+            (data.posts || []).forEach((post) => {
+                feedPosts.push(post);
+                feedTrack.appendChild(buildFeedCard(post));
+            });
+            renderFeedEmptyState();
+        } catch (err) {
+            // Feed sits on top of core chat — fail quietly.
+        } finally {
+            feedLoadingMore = false;
+        }
+    }
+
+    function openFeed() {
+        const wasClosed = feedBackdrop.hidden;
+        feedBackdrop.hidden = false;
+        if (wasClosed) openOverlay("feed", closeFeed);
+        if (!feedLoadedOnce) {
+            feedLoadedOnce = true;
+            loadFeedPage(true);
+        }
+    }
+
+    function closeFeed() {
+        feedBackdrop.hidden = true;
+        closeCommentsDrawer();
+    }
+
+    feedNavBtn.addEventListener("click", openFeed);
+    feedCloseBtn.addEventListener("click", () => closeOverlay("feed"));
+    feedBackdrop.addEventListener("click", (e) => {
+        if (e.target === feedBackdrop) closeOverlay("feed");
+    });
+
+    // Swipe left/right is handled natively by the scroll-snap track;
+    // this just loads the next page a little before the user runs out
+    // of cards, and shows/hides the desktop prev/next arrows.
+    feedTrack.addEventListener("scroll", () => {
+        clearTimeout(feedScrollDebounce);
+        feedScrollDebounce = setTimeout(() => {
+            const cardWidth = feedTrack.clientWidth || 1;
+            const index = Math.round(feedTrack.scrollLeft / cardWidth);
+            feedPrevBtn.hidden = index <= 0;
+            feedNextBtn.hidden = index >= feedPosts.length - 1;
+            if (feedTrack.scrollLeft + feedTrack.clientWidth * 1.5 >= feedTrack.scrollWidth) {
+                loadFeedPage(false);
+            }
+        }, 120);
+    });
+
+    feedPrevBtn.addEventListener("click", () => {
+        feedTrack.scrollBy({ left: -feedTrack.clientWidth, behavior: "smooth" });
+    });
+    feedNextBtn.addEventListener("click", () => {
+        feedTrack.scrollBy({ left: feedTrack.clientWidth, behavior: "smooth" });
+    });
+
+    // Show desktop arrows only for non-touch pointers; touch users just swipe.
+    if (window.matchMedia && window.matchMedia("(pointer: fine)").matches) {
+        feedPrevBtn.hidden = true; // stays hidden until scrolled past the first card
+        feedNextBtn.hidden = feedPosts.length <= 1;
+    }
+
+    document.addEventListener("keydown", (e) => {
+        if (feedBackdrop.hidden) return;
+        if (e.key === "ArrowRight") feedTrack.scrollBy({ left: feedTrack.clientWidth, behavior: "smooth" });
+        else if (e.key === "ArrowLeft") feedTrack.scrollBy({ left: -feedTrack.clientWidth, behavior: "smooth" });
+        else if (e.key === "Escape" && !feedCommentsDrawer.hidden) closeCommentsDrawer();
+    });
+
+    // ---- Like / comment / share / delete (event delegation) ----
+    feedTrack.addEventListener("click", async (e) => {
+        const card = e.target.closest(".feed-card");
+        if (!card) return;
+        const postId = parseInt(card.dataset.postId, 10);
+
+        if (e.target.closest(".feed-like-btn")) {
+            const btn = card.querySelector(".feed-like-btn");
+            btn.disabled = true;
+            try {
+                const res = await fetch(`/api/posts/${postId}/like`, { method: "POST" });
+                if (res.ok) {
+                    const data = await res.json();
+                    applyLikeState(postId, data.liked, data.like_count);
+                }
+            } catch (err) { /* ignore */ } finally { btn.disabled = false; }
+            return;
+        }
+
+        if (e.target.closest(".feed-comment-btn")) {
+            openCommentsDrawer(postId);
+            return;
+        }
+
+        if (e.target.closest(".feed-share-btn")) {
+            await handleShare(postId, card);
+            return;
+        }
+
+        if (e.target.closest(".feed-card-delete")) {
+            if (!confirm("Delete this post?")) return;
+            try {
+                const res = await fetch(`/api/posts/${postId}`, { method: "DELETE" });
+                if (res.ok) removePostFromFeed(postId);
+            } catch (err) { /* ignore */ }
+        }
+    });
+
+    function applyLikeState(postId, liked, likeCount) {
+        const post = feedPosts.find((p) => p.id === postId);
+        if (post) { post.liked_by_me = liked; post.like_count = likeCount; }
+        const card = feedTrack.querySelector(`.feed-card[data-post-id="${postId}"]`);
+        if (!card) return;
+        const btn = card.querySelector(".feed-like-btn");
+        btn.classList.toggle("feed-liked", !!liked);
+        btn.innerHTML = `${likeIconSvg(!!liked)}<span class="feed-like-count">${likeCount}</span>`;
+    }
+
+    async function handleShare(postId, card) {
+        const post = feedPosts.find((p) => p.id === postId);
+        const shareUrl = `${window.location.origin}${window.location.pathname}#post-${postId}`;
+        const shareText = post && post.text ? post.text.slice(0, 120) : "Check out this post on Zoble";
+
+        if (navigator.share) {
+            try {
+                await navigator.share({ title: "Zoble", text: shareText, url: shareUrl });
+            } catch (err) {
+                return; // user cancelled the native share sheet — don't count it
+            }
+        } else if (navigator.clipboard) {
+            try {
+                await navigator.clipboard.writeText(shareUrl);
+            } catch (err) { /* clipboard may be unavailable — still record the share */ }
+        }
+
+        try {
+            const res = await fetch(`/api/posts/${postId}/share`, { method: "POST" });
+            if (res.ok) {
+                const data = await res.json();
+                if (post) post.share_count = data.share_count;
+                const countEl = card.querySelector(".feed-share-count");
+                if (countEl) countEl.textContent = data.share_count;
+            }
+        } catch (err) { /* ignore */ }
+    }
+
+    function removePostFromFeed(postId) {
+        feedPosts = feedPosts.filter((p) => p.id !== postId);
+        const card = feedTrack.querySelector(`.feed-card[data-post-id="${postId}"]`);
+        if (card) card.remove();
+        renderFeedEmptyState();
+    }
+
+    function addPostToFeedFront(post) {
+        if (feedPosts.some((p) => p.id === post.id)) return;
+        feedPosts.unshift(post);
+        feedTrack.insertBefore(buildFeedCard(post), feedTrack.firstChild);
+        renderFeedEmptyState();
+        if (post.user_id === CURRENT_USER_ID && !feedBackdrop.hidden) {
+            feedTrack.scrollTo({ left: 0, behavior: "smooth" });
+        }
+    }
+
+    // ---- Comments drawer ----
+    function openCommentsDrawer(postId) {
+        activeCommentsPostId = postId;
+        feedCommentsDrawer.hidden = false;
+        feedCommentsList.innerHTML = `<p class="feed-comments-empty">Loading…</p>`;
+        loadComments(postId);
+    }
+    function closeCommentsDrawer() {
+        feedCommentsDrawer.hidden = true;
+        activeCommentsPostId = null;
+        feedCommentInput.value = "";
+    }
+    feedCommentsCloseBtn.addEventListener("click", closeCommentsDrawer);
+
+    async function loadComments(postId) {
+        try {
+            const res = await fetch(`/api/posts/${postId}/comments`);
+            if (!res.ok) return;
+            const data = await res.json();
+            if (activeCommentsPostId !== postId) return; // drawer moved on already
+            renderComments(data.comments || []);
+        } catch (err) {
+            if (activeCommentsPostId === postId) {
+                feedCommentsList.innerHTML = `<p class="feed-comments-empty">Couldn't load comments.</p>`;
+            }
+        }
+    }
+
+    function renderComments(comments) {
+        if (!comments.length) {
+            feedCommentsList.innerHTML = `<p class="feed-comments-empty">No comments yet. Say something!</p>`;
+            return;
+        }
+        feedCommentsList.innerHTML = comments.map((c) => `
+            <div class="feed-comment-row">
+                <span class="avatar avatar-sm"><img src="/static/uploads/${c.profile_pic}" alt="${escapeHtml(c.full_name || c.username)}"></span>
+                <span class="feed-comment-body">
+                    <span class="feed-comment-name">${escapeHtml(c.full_name || c.username)}</span>
+                    <span class="feed-comment-time">${feedTimeAgo(c.created_at)}</span>
+                    <div class="feed-comment-text">${escapeHtml(c.text)}</div>
+                </span>
+            </div>`).join("");
+        feedCommentsList.scrollTop = feedCommentsList.scrollHeight;
+    }
+
+    function bumpCommentCount(postId, count) {
+        const post = feedPosts.find((p) => p.id === postId);
+        if (post) post.comment_count = count;
+        const card = feedTrack.querySelector(`.feed-card[data-post-id="${postId}"] .feed-comment-count`);
+        if (card) card.textContent = count;
+    }
+
+    feedCommentForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const text = feedCommentInput.value.trim();
+        if (!text || !activeCommentsPostId) return;
+        const postId = activeCommentsPostId;
+        feedCommentInput.value = "";
+        try {
+            const res = await fetch(`/api/posts/${postId}/comments`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ text }),
+            });
+            if (res.ok) {
+                const data = await res.json();
+                bumpCommentCount(postId, data.data.comment_count);
+                if (activeCommentsPostId === postId) loadComments(postId);
+            }
+        } catch (err) { /* ignore */ }
+    });
+
+    // ---- Compose (new post: text and/or photo) ----
+    function openComposeModal() {
+        feedComposeText.value = "";
+        feedComposeFile = null;
+        feedComposePhotoInput.value = "";
+        feedComposePreviewWrap.hidden = true;
+        feedComposePreviewImg.src = "";
+        feedComposeStatus.hidden = true;
+        feedComposeBackdrop.hidden = false;
+        openOverlay("feedCompose", closeComposeModal);
+    }
+    function closeComposeModal() {
+        feedComposeBackdrop.hidden = true;
+    }
+    feedComposeFab.addEventListener("click", openComposeModal);
+    feedComposeCloseBtn.addEventListener("click", () => closeOverlay("feedCompose"));
+    feedComposeBackdrop.addEventListener("click", (e) => {
+        if (e.target === feedComposeBackdrop) closeOverlay("feedCompose");
+    });
+
+    feedComposePhotoBtn.addEventListener("click", () => feedComposePhotoInput.click());
+    feedComposePhotoInput.addEventListener("change", () => {
+        const file = feedComposePhotoInput.files && feedComposePhotoInput.files[0];
+        if (!file) return;
+        if (!STORY_ALLOWED_TYPES.includes(file.type)) {
+            feedComposeStatus.textContent = "Unsupported file type. Use PNG, JPG, GIF, or WEBP.";
+            feedComposeStatus.hidden = false;
+            feedComposePhotoInput.value = "";
+            return;
+        }
+        if (file.size > STORY_MAX_BYTES) {
+            feedComposeStatus.textContent = "That photo is too large. Max 5 MB.";
+            feedComposeStatus.hidden = false;
+            feedComposePhotoInput.value = "";
+            return;
+        }
+        feedComposeStatus.hidden = true;
+        feedComposeFile = file;
+        feedComposePreviewImg.src = URL.createObjectURL(file);
+        feedComposePreviewWrap.hidden = false;
+    });
+    feedComposeRemovePhoto.addEventListener("click", () => {
+        feedComposeFile = null;
+        feedComposePhotoInput.value = "";
+        feedComposePreviewWrap.hidden = true;
+        feedComposePreviewImg.src = "";
+    });
+
+    feedComposeForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const text = feedComposeText.value.trim();
+        if (!text && !feedComposeFile) {
+            feedComposeStatus.textContent = "Add some text, a photo, or both.";
+            feedComposeStatus.hidden = false;
+            return;
+        }
+
+        feedComposeSubmitBtn.disabled = true;
+        feedComposeStatus.hidden = true;
+
+        const formData = new FormData();
+        if (text) formData.append("text", text);
+        if (feedComposeFile) formData.append("file", feedComposeFile);
+
+        try {
+            const res = await fetch("/api/posts", { method: "POST", body: formData });
+            const data = await res.json();
+            if (!res.ok) {
+                feedComposeStatus.textContent = data.error || "Could not create post.";
+                feedComposeStatus.hidden = false;
+                return;
+            }
+            // Server also broadcasts "new_post" over Socket.IO (including
+            // back to this tab), which is what actually adds the card —
+            // same pattern as story posting — so the feed never double-adds.
+            closeOverlay("feedCompose");
+            if (feedBackdrop.hidden) openFeed();
+        } catch (err) {
+            feedComposeStatus.textContent = "Network error. Please try again.";
+            feedComposeStatus.hidden = false;
+        } finally {
+            feedComposeSubmitBtn.disabled = false;
+        }
+    });
 
     function buildChatRow(user) {
         const row = document.createElement("button");
@@ -3011,6 +3578,27 @@
         if (entry && viewingUserId === payload.user_id && story === entry.stories[viewingIndex]) {
             storyReactorsCount.textContent = payload.reaction_count;
         }
+    });
+
+    // ---- Feed (news feed) realtime sync ----
+    socket.on("new_post", (payload) => addPostToFeedFront(payload));
+
+    socket.on("post_deleted", (payload) => removePostFromFeed(payload.post_id));
+
+    socket.on("post_liked", (payload) => {
+        applyLikeState(payload.post_id, payload.liked, payload.like_count);
+    });
+
+    socket.on("post_commented", (payload) => {
+        bumpCommentCount(payload.post_id, payload.comment_count);
+        if (activeCommentsPostId === payload.post_id) loadComments(payload.post_id);
+    });
+
+    socket.on("post_shared", (payload) => {
+        const post = feedPosts.find((p) => p.id === payload.post_id);
+        if (post) post.share_count = payload.share_count;
+        const countEl = feedTrack.querySelector(`.feed-card[data-post-id="${payload.post_id}"] .feed-share-count`);
+        if (countEl) countEl.textContent = payload.share_count;
     });
 
     // ---------------------------------------------------------------
