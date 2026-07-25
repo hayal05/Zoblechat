@@ -497,8 +497,9 @@
         </div>
     </div>
 
-    <!-- ============ FEED (swipeable news feed) ============ -->
-    <div class="modal-backdrop feed-backdrop" id="feedBackdrop" hidden>
+    <!-- ============ FEED (vertical news feed — independent white page
+         that extends the chat pane, scrollable like Facebook) ============ -->
+    <div class="feed-backdrop" id="feedBackdrop" hidden>
         <div class="feed-viewer" id="feedViewer">
             <header class="feed-header">
                 <span class="feed-header-title">News Feed</span>
@@ -510,19 +511,15 @@
                 </button>
             </header>
 
-            <!-- Horizontal scroll-snap track — native touch swipe (left/right)
-                 moves between posts; loadMorePosts() extends it as the user
-                 nears the end. -->
-            <div class="feed-track" id="feedTrack"></div>
-
-            <div class="feed-empty" id="feedEmpty" hidden>
-                <p>No posts yet.</p>
-                <p class="feed-empty-sub">Be the first to post something.</p>
+            <!-- Vertical scroll list — native scroll up/down, just like a
+                 normal Facebook-style feed. loadFeedPage() extends it as
+                 the user nears the bottom. -->
+            <div class="feed-track" id="feedTrack">
+                <div class="feed-empty" id="feedEmpty" hidden>
+                    <p>No posts yet.</p>
+                    <p class="feed-empty-sub">Be the first to post something.</p>
+                </div>
             </div>
-
-            <!-- Desktop-only prev/next arrows; touch users just swipe -->
-            <button class="feed-arrow feed-arrow-prev" id="feedPrevBtn" type="button" aria-label="Previous post" hidden></button>
-            <button class="feed-arrow feed-arrow-next" id="feedNextBtn" type="button" aria-label="Next post" hidden></button>
 
             <button class="feed-compose-fab" id="feedComposeFab" type="button" title="New post">
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
@@ -1365,8 +1362,6 @@
     const feedTrack = document.getElementById("feedTrack");
     const feedEmpty = document.getElementById("feedEmpty");
     const feedCloseBtn = document.getElementById("feedCloseBtn");
-    const feedPrevBtn = document.getElementById("feedPrevBtn");
-    const feedNextBtn = document.getElementById("feedNextBtn");
     const feedComposeFab = document.getElementById("feedComposeFab");
     const feedCommentsDrawer = document.getElementById("feedCommentsDrawer");
     const feedCommentsList = document.getElementById("feedCommentsList");
@@ -1421,12 +1416,10 @@
         const hasImage = !!post.image_url;
         const hasText = !!(post.text && post.text.trim());
 
-        let mediaHtml;
-        if (hasImage) {
-            mediaHtml = `<div class="feed-card-media"><img src="${post.image_url}" alt="Post photo"></div>`;
-        } else {
-            mediaHtml = `<div class="feed-card-media feed-card-text-only"><p class="feed-card-text-big">${escapeHtml(post.text || "")}</p></div>`;
-        }
+        // Text (if any) always renders above the picture (if any), same
+        // reading order as a normal Facebook-style feed post.
+        const textHtml = hasText ? `<p class="feed-card-text">${escapeHtml(post.text)}</p>` : "";
+        const mediaHtml = hasImage ? `<div class="feed-card-media"><img src="${post.image_url}" alt="Post photo" loading="lazy"></div>` : "";
 
         card.innerHTML = `
             <div class="feed-card-header">
@@ -1444,8 +1437,8 @@
                     </svg>
                 </button>
             </div>
+            ${textHtml}
             ${mediaHtml}
-            ${hasImage && hasText ? `<p class="feed-card-caption">${escapeHtml(post.text)}</p>` : ""}
             <div class="feed-card-footer">
                 <button class="feed-action-btn feed-like-btn${post.liked_by_me ? " feed-liked" : ""}" type="button">
                     ${likeIconSvg(!!post.liked_by_me)}
@@ -1479,7 +1472,7 @@
 
         if (reset) {
             feedPosts = [];
-            feedTrack.innerHTML = "";
+            feedTrack.querySelectorAll(".feed-card").forEach((el) => el.remove());
             feedHasMore = true;
         }
 
@@ -1523,40 +1516,21 @@
         if (e.target === feedBackdrop) closeOverlay("feed");
     });
 
-    // Swipe left/right is handled natively by the scroll-snap track;
+    // Plain vertical scrolling, native up/down like any normal feed —
     // this just loads the next page a little before the user runs out
-    // of cards, and shows/hides the desktop prev/next arrows.
+    // of posts at the bottom.
     feedTrack.addEventListener("scroll", () => {
         clearTimeout(feedScrollDebounce);
         feedScrollDebounce = setTimeout(() => {
-            const cardWidth = feedTrack.clientWidth || 1;
-            const index = Math.round(feedTrack.scrollLeft / cardWidth);
-            feedPrevBtn.hidden = index <= 0;
-            feedNextBtn.hidden = index >= feedPosts.length - 1;
-            if (feedTrack.scrollLeft + feedTrack.clientWidth * 1.5 >= feedTrack.scrollWidth) {
+            if (feedTrack.scrollTop + feedTrack.clientHeight * 1.5 >= feedTrack.scrollHeight) {
                 loadFeedPage(false);
             }
         }, 120);
     });
 
-    feedPrevBtn.addEventListener("click", () => {
-        feedTrack.scrollBy({ left: -feedTrack.clientWidth, behavior: "smooth" });
-    });
-    feedNextBtn.addEventListener("click", () => {
-        feedTrack.scrollBy({ left: feedTrack.clientWidth, behavior: "smooth" });
-    });
-
-    // Show desktop arrows only for non-touch pointers; touch users just swipe.
-    if (window.matchMedia && window.matchMedia("(pointer: fine)").matches) {
-        feedPrevBtn.hidden = true; // stays hidden until scrolled past the first card
-        feedNextBtn.hidden = feedPosts.length <= 1;
-    }
-
     document.addEventListener("keydown", (e) => {
         if (feedBackdrop.hidden) return;
-        if (e.key === "ArrowRight") feedTrack.scrollBy({ left: feedTrack.clientWidth, behavior: "smooth" });
-        else if (e.key === "ArrowLeft") feedTrack.scrollBy({ left: -feedTrack.clientWidth, behavior: "smooth" });
-        else if (e.key === "Escape" && !feedCommentsDrawer.hidden) closeCommentsDrawer();
+        if (e.key === "Escape" && !feedCommentsDrawer.hidden) closeCommentsDrawer();
     });
 
     // ---- Like / comment / share / delete (event delegation) ----
@@ -1648,7 +1622,7 @@
         feedTrack.insertBefore(buildFeedCard(post), feedTrack.firstChild);
         renderFeedEmptyState();
         if (post.user_id === CURRENT_USER_ID && !feedBackdrop.hidden) {
-            feedTrack.scrollTo({ left: 0, behavior: "smooth" });
+            feedTrack.scrollTo({ top: 0, behavior: "smooth" });
         }
     }
 
