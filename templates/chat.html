@@ -5,6 +5,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
 {% endblock %}
 
+{% macro row_status_ticks(is_read) %}
+<span class="row-status{{ ' read' if is_read else '' }}" title="{{ 'Read' if is_read else 'Sent' }}"><svg class="msg-status-tick" viewBox="0 0 16 12" width="12" height="10" aria-hidden="true"><path d="M2 6.3L6 10.3L14 1.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>{% if is_read %}<svg class="msg-status-tick" viewBox="0 0 16 12" width="12" height="10" aria-hidden="true"><path d="M2 6.3L6 10.3L14 1.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>{% endif %}</span>
+{% endmacro %}
+
 {% macro verified_badge(user) %}
 {%- if user.is_verified -%}
 <span class="verified-badge {{ 'verified-badge-admin' if user.is_admin else 'verified-badge-user' }}" title="{{ 'Admin · Verified' if user.is_admin else 'Verified' }}">
@@ -129,7 +133,7 @@
                             <span class="chat-row-name">{{ user.full_name }}{{ verified_badge(user) }}</span>
                         </span>
                         {% if user.last_message %}
-                        <span class="chat-row-preview" data-default="Tap to open conversation">{{ "You: " if user.last_message.from_me else "" }}{{ "📷 Photo" if user.last_message.message_type == "image" else user.last_message.text }}</span>
+                        <span class="chat-row-preview" data-default="Tap to open conversation">{% if user.last_message.from_me %}{{ row_status_ticks(user.last_message.is_read) }}{% endif %}{{ "📷 Photo" if user.last_message.message_type == "image" else user.last_message.text }}</span>
                         {% else %}
                         <span class="chat-row-preview" data-default="Tap to open conversation">Tap to open conversation</span>
                         {% endif %}
@@ -624,6 +628,15 @@
         return `<span class="${cls}" title="${isRead ? "Read" : "Sent"}">${ticks}</span>`;
     }
 
+    // Same tick markup, styled for the sidebar preview row instead of a
+    // bubble (see .row-status in style.css and the matching row_status_ticks
+    // Jinja macro used for the server-rendered rows on first page load) —
+    // this is what lets sent/read status show up without opening the chat.
+    function renderRowStatus(isRead) {
+        const ticks = isRead ? MSG_STATUS_TICK_SVG + MSG_STATUS_TICK_SVG : MSG_STATUS_TICK_SVG;
+        return `<span class="row-status${isRead ? " read" : ""}" title="${isRead ? "Read" : "Sent"}">${ticks}</span>`;
+    }
+
     // Called when a "messages_seen" event tells us the recipient just read
     // everything we'd sent them — flips every matching sent-tick to the
     // double-check "read" state live, without re-fetching anything.
@@ -638,6 +651,15 @@
             statusEl.title = "Read";
             statusEl.innerHTML = MSG_STATUS_TICK_SVG + MSG_STATUS_TICK_SVG;
         });
+
+        // Sidebar preview tick for this conversation, so the read state is
+        // visible in the chat list too — not just once the thread is open.
+        const rowStatus = chatList.querySelector(`.chat-row[data-user-id="${recipientId}"] .row-status`);
+        if (rowStatus) {
+            rowStatus.classList.add("read");
+            rowStatus.title = "Read";
+            rowStatus.innerHTML = MSG_STATUS_TICK_SVG + MSG_STATUS_TICK_SVG;
+        }
     }
 
     function appendMessage(msg, animate) {
@@ -1264,12 +1286,13 @@
         return row;
     }
 
-    function setRowPreview(userId, text) {
+    function setRowPreview(userId, msg) {
         const row = ensureChatRow(userId);
         if (!row) return;
         if (chatList.firstElementChild !== row) chatList.prepend(row); // bump to top, most-recent-first
         const preview = row.querySelector(".chat-row-preview");
-        preview.textContent = text;
+        const fromMe = msg.sender_id === CURRENT_USER_ID;
+        preview.innerHTML = (fromMe ? renderRowStatus(!!msg.is_read) : "") + escapeHtml(messagePreviewText(msg));
     }
 
     // ---------------------------------------------------------------
@@ -2804,7 +2827,7 @@
         }
 
         const otherPartyId = msg.sender_id === CURRENT_USER_ID ? msg.recipient_id : msg.sender_id;
-        setRowPreview(otherPartyId, (msg.sender_id === CURRENT_USER_ID ? "You: " : "") + messagePreviewText(msg));
+        setRowPreview(otherPartyId, msg);
 
         if (!isOpenConversation && msg.sender_id !== CURRENT_USER_ID) {
             bumpUnreadBadge(msg.sender_id);
