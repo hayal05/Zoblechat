@@ -15,10 +15,11 @@ eventlet.monkey_patch()
 import os
 import re
 import uuid
+import json
 import secrets
-import smtplib
 import logging
-from email.mime.text import MIMEText
+import urllib.request
+import urllib.error
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -142,15 +143,23 @@ OTP_RESEND_COOLDOWN_SECONDS = 45
 # -------------------------------------------------------------------
 # Outbound email (verification codes only)
 # -------------------------------------------------------------------
-# All optional at the config level: if SMTP_HOST isn't set, send_otp_email()
-# logs the code instead of emailing it, so local development never needs
-# real mail credentials just to exercise the signup flow.
-SMTP_HOST = os.environ.get("SMTP_HOST")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USERNAME = os.environ.get("SMTP_USERNAME")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
-SMTP_FROM = os.environ.get("SMTP_FROM", "no-reply@zoble.chat")
-SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").lower() != "false"
+# Sent via the Resend HTTP API (https://resend.com) rather than raw SMTP.
+# This matters on platforms like Render, whose free web services block
+# all outbound traffic to SMTP ports (25/465/587) — an HTTPS POST to
+# api.resend.com on port 443 isn't affected by that restriction, and it
+# also sidesteps needing mailbox credentials/app-passwords entirely.
+#
+# All optional at the config level: if RESEND_API_KEY isn't set,
+# send_otp_email() logs the code instead of emailing it, so local
+# development never needs a real API key just to exercise the signup flow.
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
+# resend.dev's shared sandbox sender works out of the box with no domain
+# setup, but only delivers to the email the Resend account itself is
+# registered with — fine for testing, but you'll want to verify your own
+# domain in the Resend dashboard and set RESEND_FROM to an address on it
+# before real users can receive codes at arbitrary addresses.
+RESEND_FROM = os.environ.get("RESEND_FROM", "Zoble <onboarding@resend.dev>")
+RESEND_API_URL = "https://api.resend.com/emails"
 
 # -------------------------------------------------------------------
 # App Configuration
@@ -943,38 +952,58 @@ def generate_otp_code():
 
 
 def send_otp_email(to_email, code, full_name):
-    """Emails a verification code for the signup flow. Falls back to just
-    logging the code when SMTP_HOST isn't configured, so local development
-    and this project's own tests can exercise registration without real
-    mail credentials — see the SMTP_* constants above.
+    """Emails a verification code for the signup flow via the Resend HTTP
+    API. Falls back to just logging the code when RESEND_API_KEY isn't
+    configured, so local development and this project's own tests can
+    exercise registration without a real API key — see the RESEND_*
+    constants above.
 
     Raises on a genuine send failure so the caller can surface a real error
     to the person instead of silently leaving them stuck waiting on an
     email that never arrives.
     """
     subject = "Your Zoble verification code"
-    body = (
+    text_body = (
         f"Hi {full_name},\n\n"
         f"Your Zoble verification code is: {code}\n\n"
         f"This code expires in {OTP_EXPIRY_MINUTES} minutes. If you didn't "
         f"try to sign up for Zoble, you can ignore this email.\n"
     )
 
-    if not SMTP_HOST:
-        logger.info("[DEV] Verification code for %s: %s (no SMTP_HOST configured)", to_email, code)
+    if not RESEND_API_KEY:
+        logger.info("[DEV] Verification code for %s: %s (no RESEND_API_KEY configured)", to_email, code)
         return
 
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = SMTP_FROM
-    msg["To"] = to_email
+    payload = json.dumps({
+        "from": RESEND_FROM,
+        "to": [to_email],
+        "subject": subject,
+        "text": text_body,
+    }).encode("utf-8")
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-        if SMTP_USE_TLS:
-            server.starttls()
-        if SMTP_USERNAME and SMTP_PASSWORD:
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-        server.sendmail(SMTP_FROM, [to_email], msg.as_string())
+    req = urllib.request.Request(
+        RESEND_API_URL,
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+    except urllib.error.HTTPError as e:
+        # Resend returns a JSON error body (e.g. unverified domain, invalid
+        # "to" address for a sandbox sender) — log it so the real cause
+        # shows up server-side instead of just a bare status code.
+        detail = e.read().decode("utf-8", errors="replace")
+        logger.error("Resend API rejected the request (%s): %s", e.code, detail)
+        raise
+    except urllib.error.URLError:
+        logger.exception("Failed to reach Resend API")
+        raise
 
 
 def generate_unique_username(email, full_name):
