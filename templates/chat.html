@@ -278,6 +278,82 @@
         </div>
     </div>
 
+    <!-- ============ GROUP INFO MODAL ============ -->
+    <!-- Opened by tapping the group name/avatar in a group conversation's
+         header. Read-only fields for a regular member; admins additionally
+         get photo/name editing, an "Add members" picker, and per-member
+         role/removal controls. Backed by PATCH/POST/DELETE on
+         /api/groups/<id> and /api/groups/<id>/members[/<user_id>[/role]],
+         plus POST /api/groups/<id>/leave — see app.py. -->
+    <div class="modal-backdrop" id="groupInfoModalBackdrop" hidden>
+        <div class="modal-card modal-card-lg" role="dialog" aria-modal="true" aria-labelledby="groupInfoModalTitle">
+            <div class="modal-header">
+                <h2 id="groupInfoModalTitle">Group info</h2>
+                <button class="btn-icon" id="closeGroupInfoBtn" title="Close" type="button">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="modal-body group-info-body">
+                <div class="profile-avatar-picker">
+                    <span class="avatar avatar-lg avatar-group" id="groupInfoAvatarWrap">
+                        <img id="groupInfoAvatarImg" src="" alt="Group photo" hidden>
+                        <svg id="groupInfoAvatarIcon" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="9" cy="7" r="4"></circle>
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                        </svg>
+                    </span>
+                    <label class="btn btn-secondary" for="groupPhotoInput" id="groupPhotoLabel" hidden>Change photo</label>
+                    <input type="file" id="groupPhotoInput" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+                    <button class="btn-text-danger" id="removeGroupPhotoBtn" type="button" hidden>Remove photo</button>
+                    <p class="field-hint" id="groupInfoPhotoHint" hidden>PNG, JPG, GIF, or WEBP. Max 5&nbsp;MB.</p>
+                </div>
+
+                <label class="field-label" for="groupInfoNameInput">Group name</label>
+                <div class="group-name-edit-row">
+                    <input class="field-input" type="text" id="groupInfoNameInput" maxlength="60" disabled>
+                    <button class="btn btn-secondary" id="saveGroupNameBtn" type="button" hidden>Save</button>
+                </div>
+
+                <p class="field-error" id="groupInfoError" hidden></p>
+                <p class="field-success" id="groupInfoSuccess" hidden></p>
+
+                <div class="group-info-members-header">
+                    <label class="field-label" id="groupInfoMembersLabel">Members</label>
+                    <button class="btn-text-link" id="showAddMembersBtn" type="button" hidden>+ Add members</button>
+                </div>
+
+                <!-- Add-members picker: hidden until an admin taps "+ Add members" -->
+                <div class="add-members-panel" id="addMembersPanel" hidden>
+                    <div class="search-box group-member-search">
+                        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                        <input type="text" id="addMembersSearchInput" class="search-input" placeholder="Search people…" autocomplete="off">
+                    </div>
+                    <div class="member-picker-list" id="addMembersPickerList"></div>
+                    <p class="field-hint" id="addMembersCount">0 selected</p>
+                    <div class="add-members-actions">
+                        <button class="btn btn-secondary" id="cancelAddMembersBtn" type="button">Cancel</button>
+                        <button class="btn btn-primary" id="confirmAddMembersBtn" type="button">Add</button>
+                    </div>
+                </div>
+
+                <div class="group-members-list" id="groupInfoMembersList"></div>
+
+                <div class="group-info-footer">
+                    <button class="btn btn-danger btn-block" id="leaveGroupBtn" type="button">Leave group</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ============ MAIN CHAT PANE ============ -->
     <main class="chat-pane">
         <div class="chat-pane-empty" id="chatEmptyState">
@@ -297,25 +373,28 @@
                         <polyline points="15 18 9 12 15 6"></polyline>
                     </svg>
                 </button>
-                <span class="avatar" id="activeAvatarWrap">
-                    <img id="activeAvatar" src="" alt="">
-                    <span class="presence-dot"></span>
-                </span>
-                <span class="avatar avatar-group" id="activeGroupAvatarWrap" hidden>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                        <circle cx="9" cy="7" r="4"></circle>
-                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-                    </svg>
-                </span>
-                <span class="chat-header-identity">
-                    <span class="chat-header-top">
-                        <span class="chat-header-name" id="activeUsername"></span>
-                        <span class="chat-header-badge" id="activeHeaderBadge" title="Only you and this person can see these messages">Private Chat</span>
+                <button class="chat-header-main" id="chatHeaderMain" type="button" title="View group info">
+                    <span class="avatar" id="activeAvatarWrap">
+                        <img id="activeAvatar" src="" alt="">
+                        <span class="presence-dot"></span>
                     </span>
-                    <span class="chat-header-status" id="activeStatus">—</span>
-                </span>
+                    <span class="avatar avatar-group" id="activeGroupAvatarWrap" hidden>
+                        <img id="activeGroupAvatarImg" src="" alt="" hidden>
+                        <svg id="activeGroupAvatarIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="9" cy="7" r="4"></circle>
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                        </svg>
+                    </span>
+                    <span class="chat-header-identity">
+                        <span class="chat-header-top">
+                            <span class="chat-header-name" id="activeUsername"></span>
+                            <span class="chat-header-badge" id="activeHeaderBadge" title="Only you and this person can see these messages">Private Chat</span>
+                        </span>
+                        <span class="chat-header-status" id="activeStatus">—</span>
+                    </span>
+                </button>
             </header>
 
             <div class="messages-scroll" id="messagesScroll">
@@ -1353,7 +1432,12 @@
 
     loadGroupsFromServer(); // populate the Group tab's sidebar on load
 
-    function groupAvatarHtml() {
+    function groupAvatarHtml(group) {
+        if (group && group.photo) {
+            return `<span class="avatar avatar-group">
+                <img src="/static/uploads/${group.photo}" alt="${escapeHtml(group.name || "")}'s photo">
+            </span>`;
+        }
         return `<span class="avatar avatar-group">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
@@ -1379,7 +1463,7 @@
         row.dataset.groupId = group.id;
         const unread = group.unread_count || 0;
         row.innerHTML = `
-            ${groupAvatarHtml()}
+            ${groupAvatarHtml(group)}
             <span class="chat-row-body">
                 <span class="chat-row-top">
                     <span class="chat-row-name">${escapeHtml(group.name)}</span>
@@ -1571,10 +1655,32 @@
     // of presence, and a sender name above each incoming bubble since a
     // group (unlike a 1:1 chat) can have more than one "other" sender.
     // ---------------------------------------------------------------
+    // Shared by the header avatar and the group-info modal avatar: shows
+    // the custom photo if the group has one, otherwise the generic group
+    // icon — there's no shared "default group photo" file the way there
+    // is for users (see Group.photo's comment in app.py).
+    function renderGroupAvatarInto(imgEl, iconEl, group) {
+        if (group.photo) {
+            imgEl.src = `/static/uploads/${group.photo}?v=${Date.now()}`;
+            imgEl.hidden = false;
+            iconEl.hidden = true;
+        } else {
+            imgEl.hidden = true;
+            imgEl.removeAttribute("src");
+            iconEl.hidden = false;
+        }
+    }
+
     function applyGroupHeader(group) {
         document.getElementById("activeUsername").textContent = group.name;
         activeAvatarWrapEl.hidden = true;
         activeGroupAvatarWrapEl.hidden = false;
+        chatHeaderMain.classList.add("is-group");
+        renderGroupAvatarInto(
+            document.getElementById("activeGroupAvatarImg"),
+            document.getElementById("activeGroupAvatarIcon"),
+            group
+        );
         activeHeaderBadgeEl.textContent = "Group Chat";
         activeHeaderBadgeEl.dataset.kind = "group";
         activeHeaderBadgeEl.title = "Everyone in this group can see these messages";
@@ -1746,6 +1852,474 @@
         }
     }
 
+    // ---------------------------------------------------------------
+    // Group info modal — view/edit group name & photo, manage members,
+    // leave the group. Opened by tapping the group name/avatar in a
+    // group conversation's header (see chatHeaderMain below). Admin-only
+    // controls (name/photo edit, add/remove members, role changes) show
+    // only when group.my_role === "admin"; a plain member gets a
+    // read-only member list plus "Leave group".
+    // ---------------------------------------------------------------
+    const groupInfoModalBackdrop = document.getElementById("groupInfoModalBackdrop");
+    const closeGroupInfoBtn = document.getElementById("closeGroupInfoBtn");
+    const groupInfoAvatarImg = document.getElementById("groupInfoAvatarImg");
+    const groupInfoAvatarIcon = document.getElementById("groupInfoAvatarIcon");
+    const groupPhotoInput = document.getElementById("groupPhotoInput");
+    const groupPhotoLabel = document.getElementById("groupPhotoLabel");
+    const removeGroupPhotoBtn = document.getElementById("removeGroupPhotoBtn");
+    const groupInfoPhotoHint = document.getElementById("groupInfoPhotoHint");
+    const groupInfoNameInput = document.getElementById("groupInfoNameInput");
+    const saveGroupNameBtn = document.getElementById("saveGroupNameBtn");
+    const groupInfoError = document.getElementById("groupInfoError");
+    const groupInfoSuccess = document.getElementById("groupInfoSuccess");
+    const groupInfoMembersLabel = document.getElementById("groupInfoMembersLabel");
+    const showAddMembersBtn = document.getElementById("showAddMembersBtn");
+    const addMembersPanel = document.getElementById("addMembersPanel");
+    const addMembersSearchInput = document.getElementById("addMembersSearchInput");
+    const addMembersPickerList = document.getElementById("addMembersPickerList");
+    const addMembersCount = document.getElementById("addMembersCount");
+    const cancelAddMembersBtn = document.getElementById("cancelAddMembersBtn");
+    const confirmAddMembersBtn = document.getElementById("confirmAddMembersBtn");
+    const groupInfoMembersList = document.getElementById("groupInfoMembersList");
+    const leaveGroupBtn = document.getElementById("leaveGroupBtn");
+    const chatHeaderMain = document.getElementById("chatHeaderMain");
+
+    let groupInfoGroupId = null;
+    let selectedNewMemberIds = new Set();
+
+    function clearGroupInfoMessages() {
+        groupInfoError.hidden = true;
+        groupInfoSuccess.hidden = true;
+    }
+
+    function showGroupInfoError(text) {
+        groupInfoSuccess.hidden = true;
+        groupInfoError.textContent = text;
+        groupInfoError.hidden = false;
+    }
+
+    function showGroupInfoSuccess(text) {
+        groupInfoError.hidden = true;
+        groupInfoSuccess.textContent = text;
+        groupInfoSuccess.hidden = false;
+    }
+
+    function renderGroupInfoModal(group) {
+        const amAdmin = group.my_role === "admin";
+
+        renderGroupAvatarInto(groupInfoAvatarImg, groupInfoAvatarIcon, group);
+        groupPhotoLabel.hidden = !amAdmin;
+        groupInfoPhotoHint.hidden = !amAdmin;
+        removeGroupPhotoBtn.hidden = !amAdmin || !group.photo;
+
+        groupInfoNameInput.value = group.name;
+        groupInfoNameInput.disabled = !amAdmin;
+        saveGroupNameBtn.hidden = !amAdmin;
+
+        groupInfoMembersLabel.textContent = `Members (${group.member_count})`;
+        showAddMembersBtn.hidden = !amAdmin;
+        if (!amAdmin) addMembersPanel.hidden = true;
+
+        const members = (group.members || []).slice().sort((a, b) => {
+            if (a.role !== b.role) return a.role === "admin" ? -1 : 1;
+            return (a.full_name || "").localeCompare(b.full_name || "");
+        });
+
+        groupInfoMembersList.innerHTML = "";
+        members.forEach((m) => {
+            const isSelf = m.user_id === CURRENT_USER_ID;
+            const row = document.createElement("div");
+            row.className = "group-member-row";
+            row.dataset.userId = m.user_id;
+            row.innerHTML = `
+                <span class="avatar">
+                    <img src="/static/uploads/${m.profile_pic}" alt="${escapeHtml(m.full_name || "")}'s avatar">
+                </span>
+                <span class="group-member-name">
+                    ${escapeHtml(m.full_name || m.username || "Member")}${isSelf ? ' <span class="group-member-you">(You)</span>' : ""}
+                </span>
+                ${m.role === "admin" ? '<span class="group-member-role-badge">Admin</span>' : ""}
+                ${amAdmin && !isSelf ? `
+                    <button class="btn-icon group-member-menu-btn" type="button" title="Member options">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="12" cy="19" r="1.8"></circle></svg>
+                    </button>
+                    <div class="group-member-menu" hidden>
+                        <button class="group-member-menu-item" data-action="${m.role === "admin" ? "demote" : "promote"}" type="button">
+                            ${m.role === "admin" ? "Remove as admin" : "Make admin"}
+                        </button>
+                        <button class="group-member-menu-item group-member-menu-item-danger" data-action="remove" type="button">
+                            Remove from group
+                        </button>
+                    </div>
+                ` : ""}
+            `;
+            groupInfoMembersList.appendChild(row);
+        });
+    }
+
+    async function openGroupInfoModal(groupId) {
+        const group = getGroup(groupId);
+        if (!group) return;
+
+        groupInfoGroupId = groupId;
+        clearGroupInfoMessages();
+        addMembersPanel.hidden = true;
+        selectedNewMemberIds = new Set();
+        renderGroupInfoModal(group);
+
+        groupInfoModalBackdrop.hidden = false;
+        openOverlay("groupInfoModal", closeGroupInfoModal);
+
+        // Refresh from the server so roles/photo/members are current even
+        // if this tab missed a live update while the modal was closed.
+        try {
+            const res = await fetch(`/api/groups/${groupId}`);
+            if (res.ok) {
+                const data = await res.json();
+                Object.assign(group, data.group, { messages: group.messages });
+                if (groupInfoGroupId === groupId && !groupInfoModalBackdrop.hidden) {
+                    renderGroupInfoModal(group);
+                }
+                renderGroupsList();
+                if (activeConversationType === "group" && activeGroupId === group.id) {
+                    applyGroupHeader(group);
+                }
+            }
+        } catch (err) { /* keep showing what we already had locally */ }
+    }
+
+    function closeGroupInfoModal() {
+        groupInfoModalBackdrop.hidden = true;
+        groupInfoGroupId = null;
+    }
+
+    chatHeaderMain.addEventListener("click", () => {
+        if (activeConversationType === "group" && activeGroupId) {
+            openGroupInfoModal(activeGroupId);
+        }
+    });
+
+    closeGroupInfoBtn.addEventListener("click", () => closeOverlay("groupInfoModal"));
+    groupInfoModalBackdrop.addEventListener("click", (e) => {
+        if (e.target === groupInfoModalBackdrop) closeOverlay("groupInfoModal");
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !groupInfoModalBackdrop.hidden) closeOverlay("groupInfoModal");
+    });
+
+    // --- Rename group ---
+    saveGroupNameBtn.addEventListener("click", async () => {
+        const group = getGroup(groupInfoGroupId);
+        if (!group) return;
+        const name = groupInfoNameInput.value.trim();
+        clearGroupInfoMessages();
+        if (!name) {
+            showGroupInfoError("Give your group a name.");
+            return;
+        }
+        if (name === group.name) return;
+
+        saveGroupNameBtn.disabled = true;
+        try {
+            const res = await fetch(`/api/groups/${group.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                showGroupInfoError(data.error || "Could not rename group.");
+                return;
+            }
+            Object.assign(group, data.group, { messages: group.messages });
+            renderGroupsList();
+            if (activeConversationType === "group" && activeGroupId === group.id) applyGroupHeader(group);
+            showGroupInfoSuccess("Group name updated.");
+        } catch (err) {
+            showGroupInfoError("Network error. Please try again.");
+        } finally {
+            saveGroupNameBtn.disabled = false;
+        }
+    });
+
+    // --- Group photo: change / remove ---
+    groupPhotoInput.addEventListener("change", async () => {
+        const group = getGroup(groupInfoGroupId);
+        const file = groupPhotoInput.files && groupPhotoInput.files[0];
+        if (!group || !file) return;
+
+        clearGroupInfoMessages();
+        if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+            showGroupInfoError("Unsupported file type. Use PNG, JPG, GIF, or WEBP.");
+            groupPhotoInput.value = "";
+            return;
+        }
+        if (file.size > MAX_PHOTO_BYTES) {
+            showGroupInfoError("That photo is too large. Max 5 MB.");
+            groupPhotoInput.value = "";
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const res = await fetch(`/api/groups/${group.id}/photo`, { method: "POST", body: formData });
+            const data = await res.json();
+            if (!res.ok) {
+                showGroupInfoError(data.error || "Could not update group photo.");
+                return;
+            }
+            Object.assign(group, data.group, { messages: group.messages });
+            renderGroupInfoModal(group);
+            renderGroupsList();
+            if (activeConversationType === "group" && activeGroupId === group.id) applyGroupHeader(group);
+            showGroupInfoSuccess("Group photo updated.");
+        } catch (err) {
+            showGroupInfoError("Network error. Please try again.");
+        } finally {
+            groupPhotoInput.value = "";
+        }
+    });
+
+    removeGroupPhotoBtn.addEventListener("click", async () => {
+        const group = getGroup(groupInfoGroupId);
+        if (!group) return;
+        clearGroupInfoMessages();
+        try {
+            const res = await fetch(`/api/groups/${group.id}/photo`, { method: "DELETE" });
+            const data = await res.json();
+            if (!res.ok) {
+                showGroupInfoError(data.error || "Could not remove group photo.");
+                return;
+            }
+            Object.assign(group, data.group, { messages: group.messages });
+            renderGroupInfoModal(group);
+            renderGroupsList();
+            if (activeConversationType === "group" && activeGroupId === group.id) applyGroupHeader(group);
+        } catch (err) {
+            showGroupInfoError("Network error. Please try again.");
+        }
+    });
+
+    // --- Add members panel ---
+    function renderAddMembersPicker(filterText) {
+        const group = getGroup(groupInfoGroupId);
+        if (!group) return;
+        const existingIds = new Set((group.members || []).map((m) => m.user_id));
+        const q = (filterText || "").trim().toLowerCase();
+        const candidates = Object.values(knownUsers)
+            .filter((u) => u.id !== CURRENT_USER_ID && !existingIds.has(u.id))
+            .filter((u) => !q || (u.full_name || "").toLowerCase().includes(q) || (u.username || "").toLowerCase().includes(q))
+            .sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
+
+        if (!candidates.length) {
+            addMembersPickerList.innerHTML = `<p class="chat-list-empty">No matching contacts.</p>`;
+            return;
+        }
+
+        addMembersPickerList.innerHTML = "";
+        candidates.forEach((u) => {
+            const row = document.createElement("button");
+            row.type = "button";
+            row.className = "member-picker-row" + (selectedNewMemberIds.has(u.id) ? " selected" : "");
+            row.dataset.userId = u.id;
+            row.innerHTML = `
+                <span class="avatar">
+                    <img src="/static/uploads/${u.profile_pic}" alt="${escapeHtml(u.full_name || "")}'s avatar">
+                </span>
+                <span class="member-picker-name">${escapeHtml(u.full_name || u.username)}</span>
+                <span class="member-picker-check">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                </span>`;
+            addMembersPickerList.appendChild(row);
+        });
+    }
+
+    addMembersPickerList.addEventListener("click", (e) => {
+        const row = e.target.closest(".member-picker-row");
+        if (!row) return;
+        const userId = parseInt(row.dataset.userId, 10);
+        if (selectedNewMemberIds.has(userId)) {
+            selectedNewMemberIds.delete(userId);
+            row.classList.remove("selected");
+        } else {
+            selectedNewMemberIds.add(userId);
+            row.classList.add("selected");
+        }
+        addMembersCount.textContent = `${selectedNewMemberIds.size} selected`;
+    });
+
+    let addMembersSearchDebounce = null;
+    addMembersSearchInput.addEventListener("input", () => {
+        clearTimeout(addMembersSearchDebounce);
+        const q = addMembersSearchInput.value;
+        addMembersSearchDebounce = setTimeout(async () => {
+            if (q.trim()) {
+                try {
+                    const res = await fetch(`/api/search-users?q=${encodeURIComponent(q.trim())}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        (data.users || []).forEach((u) => {
+                            knownUsers[u.id] = { ...(knownUsers[u.id] || {}), ...u };
+                        });
+                    }
+                } catch (err) { /* fall back to whatever we already know */ }
+            }
+            renderAddMembersPicker(q);
+        }, 200);
+    });
+
+    showAddMembersBtn.addEventListener("click", () => {
+        selectedNewMemberIds = new Set();
+        addMembersSearchInput.value = "";
+        addMembersCount.textContent = "0 selected";
+        renderAddMembersPicker("");
+        addMembersPanel.hidden = false;
+    });
+
+    cancelAddMembersBtn.addEventListener("click", () => {
+        addMembersPanel.hidden = true;
+    });
+
+    confirmAddMembersBtn.addEventListener("click", async () => {
+        const group = getGroup(groupInfoGroupId);
+        if (!group) return;
+        if (selectedNewMemberIds.size === 0) {
+            showGroupInfoError("Select at least one person to add.");
+            return;
+        }
+        clearGroupInfoMessages();
+        confirmAddMembersBtn.disabled = true;
+        try {
+            const res = await fetch(`/api/groups/${group.id}/members`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ member_ids: Array.from(selectedNewMemberIds) }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                showGroupInfoError(data.error || "Could not add members.");
+                return;
+            }
+            Object.assign(group, data.group, { messages: group.messages });
+            renderGroupsList();
+            if (activeConversationType === "group" && activeGroupId === group.id) applyGroupHeader(group);
+            addMembersPanel.hidden = true;
+            renderGroupInfoModal(group);
+            showGroupInfoSuccess("Members added.");
+        } catch (err) {
+            showGroupInfoError("Network error. Please try again.");
+        } finally {
+            confirmAddMembersBtn.disabled = false;
+        }
+    });
+
+    // --- Per-member menu: promote/demote admin, remove from group ---
+    groupInfoMembersList.addEventListener("click", (e) => {
+        const menuBtn = e.target.closest(".group-member-menu-btn");
+        if (menuBtn) {
+            const row = menuBtn.closest(".group-member-row");
+            const menu = row.querySelector(".group-member-menu");
+            const alreadyOpen = !menu.hidden;
+            groupInfoMembersList.querySelectorAll(".group-member-menu").forEach((m) => (m.hidden = true));
+            menu.hidden = alreadyOpen;
+            return;
+        }
+
+        const actionBtn = e.target.closest(".group-member-menu-item");
+        if (actionBtn) {
+            const row = actionBtn.closest(".group-member-row");
+            const userId = parseInt(row.dataset.userId, 10);
+            const action = actionBtn.dataset.action;
+            row.querySelector(".group-member-menu").hidden = true;
+            handleMemberAction(userId, action);
+        }
+    });
+
+    document.addEventListener("click", (e) => {
+        if (!e.target.closest(".group-member-menu-btn") && !e.target.closest(".group-member-menu")) {
+            groupInfoMembersList.querySelectorAll(".group-member-menu").forEach((m) => (m.hidden = true));
+        }
+    });
+
+    async function handleMemberAction(userId, action) {
+        const group = getGroup(groupInfoGroupId);
+        if (!group) return;
+        clearGroupInfoMessages();
+
+        if (action === "remove") {
+            try {
+                const res = await fetch(`/api/groups/${group.id}/members/${userId}`, { method: "DELETE" });
+                const data = await res.json();
+                if (!res.ok) {
+                    showGroupInfoError(data.error || "Could not remove that member.");
+                    return;
+                }
+                Object.assign(group, data.group, { messages: group.messages });
+                renderGroupInfoModal(group);
+                renderGroupsList();
+                if (activeConversationType === "group" && activeGroupId === group.id) applyGroupHeader(group);
+            } catch (err) {
+                showGroupInfoError("Network error. Please try again.");
+            }
+            return;
+        }
+
+        const role = action === "promote" ? "admin" : "member";
+        try {
+            const res = await fetch(`/api/groups/${group.id}/members/${userId}/role`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ role }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                showGroupInfoError(data.error || "Could not update that member's role.");
+                return;
+            }
+            Object.assign(group, data.group, { messages: group.messages });
+            renderGroupInfoModal(group);
+            renderGroupsList();
+        } catch (err) {
+            showGroupInfoError("Network error. Please try again.");
+        }
+    }
+
+    // --- Leave group ---
+    leaveGroupBtn.addEventListener("click", async () => {
+        const group = getGroup(groupInfoGroupId);
+        if (!group) return;
+        if (!confirm(`Leave "${group.name}"? You won't be able to see this group's messages anymore.`)) {
+            return;
+        }
+        clearGroupInfoMessages();
+        leaveGroupBtn.disabled = true;
+        try {
+            const res = await fetch(`/api/groups/${group.id}/leave`, { method: "POST" });
+            const data = await res.json();
+            if (!res.ok) {
+                showGroupInfoError(data.error || "Could not leave group.");
+                return;
+            }
+            if (socket.connected) {
+                socket.emit("leave_group", { group_id: group.id });
+            }
+            groups = groups.filter((g) => g.id !== group.id);
+            renderGroupsList();
+            closeOverlay("groupInfoModal");
+            if (activeConversationType === "group" && activeGroupId === group.id) {
+                closeOverlay("conversation");
+            }
+        } catch (err) {
+            showGroupInfoError("Network error. Please try again.");
+        } finally {
+            leaveGroupBtn.disabled = false;
+        }
+    });
+
     function bumpUnreadBadge(userId) {
         const row = chatList.querySelector(`.chat-row[data-user-id="${userId}"]`);
         if (!row) return;
@@ -1773,6 +2347,7 @@
         document.getElementById("activeAvatar").src = `/static/uploads/${user.profile_pic}`;
         document.getElementById("activeAvatarWrap").hidden = false;
         document.getElementById("activeGroupAvatarWrap").hidden = true;
+        document.getElementById("chatHeaderMain").classList.remove("is-group");
         const badgeEl = document.getElementById("activeHeaderBadge");
         badgeEl.textContent = "Private Chat";
         badgeEl.dataset.kind = "";
@@ -2295,6 +2870,56 @@
         }
 
         renderGroupsList();
+    });
+
+    socket.on("group_updated", (payload) => {
+        // Fired on rename, photo change/removal, and membership changes
+        // (add/remove/role) — payload is always a full Group.to_dict().
+        const group = getGroup(payload.id);
+        if (!group) return;
+        Object.assign(group, payload, { messages: group.messages });
+        renderGroupsList();
+
+        if (activeConversationType === "group" && activeGroupId === group.id) {
+            applyGroupHeader(group);
+        }
+        if (!groupInfoModalBackdrop.hidden && groupInfoGroupId === group.id) {
+            renderGroupInfoModal(group);
+        }
+    });
+
+    socket.on("group_member_removed", (payload) => {
+        // Delivered directly to the removed/leaving user's own rooms only
+        // (see remove_group_member / leave_group in app.py) — everyone
+        // else finds out via the group_updated broadcast above.
+        if (payload.user_id !== CURRENT_USER_ID) return;
+
+        if (socket.connected) {
+            socket.emit("leave_group", { group_id: payload.group_id });
+        }
+        groups = groups.filter((g) => g.id !== payload.group_id);
+        renderGroupsList();
+
+        if (!groupInfoModalBackdrop.hidden && groupInfoGroupId === payload.group_id) {
+            closeOverlay("groupInfoModal");
+        }
+        if (activeConversationType === "group" && activeGroupId === payload.group_id) {
+            closeOverlay("conversation");
+        }
+    });
+
+    socket.on("group_member_role_changed", (payload) => {
+        // Only fired for the auto-promotion that happens when the sole
+        // admin leaves (see leave_group in app.py) — every other role
+        // change already arrives via the group_updated broadcast.
+        const group = getGroup(payload.group_id);
+        if (!group || !group.members) return;
+        const member = group.members.find((m) => m.user_id === payload.user_id);
+        if (member) member.role = payload.role;
+        if (payload.user_id === CURRENT_USER_ID) group.my_role = payload.role;
+        if (!groupInfoModalBackdrop.hidden && groupInfoGroupId === group.id) {
+            renderGroupInfoModal(group);
+        }
     });
 
     // ---------------------------------------------------------------
