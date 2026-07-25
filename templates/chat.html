@@ -1423,6 +1423,31 @@
 
     renderFeedUnreadBadge(); // seed from the server-rendered count on load
 
+    // On mobile the header row (search etc.) and stories strip float
+    // above the feed overlay (see the z-index: 41 rule in style.css)
+    // instead of being hidden by it. That only reads correctly if the
+    // feed's own content starts below them rather than under them, so
+    // this measures their combined on-screen height and feeds it back
+    // in as --feed-mobile-offset for the feed-backdrop's `top`. Re-run
+    // on resize/orientation change since that height isn't fixed (e.g.
+    // text scaling, the connection-status label wrapping).
+    const feedMobileQuery = window.matchMedia("(max-width: 760px)");
+    const sidebarHeaderEl = document.querySelector(".sidebar-header");
+    const sidebarTopbarEl = document.querySelector(".sidebar-topbar");
+
+    function syncFeedMobileOffset() {
+        if (!feedMobileQuery.matches) {
+            document.documentElement.style.setProperty("--feed-mobile-offset", "0px");
+            return;
+        }
+        const barHeight = (el) => (el ? el.getBoundingClientRect().height : 0);
+        const total = barHeight(sidebarHeaderEl) + barHeight(sidebarTopbarEl) + barHeight(storiesBar);
+        document.documentElement.style.setProperty("--feed-mobile-offset", `${total}px`);
+    }
+
+    syncFeedMobileOffset();
+    window.addEventListener("resize", syncFeedMobileOffset);
+
     function feedTimeAgo(iso) {
         const diffMs = Date.now() - new Date(iso).getTime();
         const mins = Math.max(0, Math.round(diffMs / 60000));
@@ -1459,7 +1484,7 @@
             <div class="feed-card-header">
                 <span class="avatar avatar-sm"><img src="/static/uploads/${post.profile_pic}" alt="${escapeHtml(post.full_name || post.username)}"></span>
                 <span class="feed-card-identity">
-                    <span class="feed-card-name">${escapeHtml(post.full_name || post.username)}</span>
+                    <span class="feed-card-name">${escapeHtml(post.full_name || post.username)}${verifiedBadgeHtml(post)}</span>
                     <span class="feed-card-time">${feedTimeAgo(post.created_at)}</span>
                 </span>
                 <button class="btn-icon feed-card-delete" type="button" title="Delete post" ${isOwn ? "" : "hidden"}>
@@ -1531,6 +1556,7 @@
 
     function openFeed() {
         const wasClosed = feedBackdrop.hidden;
+        syncFeedMobileOffset();
         feedBackdrop.hidden = false;
         feedSwipeReset();
         if (wasClosed) openOverlay("feed", closeFeed);
@@ -1763,7 +1789,7 @@
             <div class="feed-comment-row">
                 <span class="avatar avatar-sm"><img src="/static/uploads/${c.profile_pic}" alt="${escapeHtml(c.full_name || c.username)}"></span>
                 <span class="feed-comment-body">
-                    <span class="feed-comment-name">${escapeHtml(c.full_name || c.username)}</span>
+                    <span class="feed-comment-name">${escapeHtml(c.full_name || c.username)}${verifiedBadgeHtml(c)}</span>
                     <span class="feed-comment-time">${feedTimeAgo(c.created_at)}</span>
                     <div class="feed-comment-text">${escapeHtml(c.text)}</div>
                 </span>
