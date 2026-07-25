@@ -65,6 +65,9 @@ CHAT_PHOTOS_FOLDER = os.path.join(UPLOAD_FOLDER, "chat_photos")
 # independent filename namespace, independent cleanup (expired stories get
 # their files deleted; chat photos never do).
 STORY_PHOTOS_FOLDER = os.path.join(UPLOAD_FOLDER, "story_photos")
+# Feed post photos live in their own subfolder too — same reasoning as
+# CHAT_PHOTOS_FOLDER/STORY_PHOTOS_FOLDER, independent filename namespace.
+POST_PHOTOS_FOLDER = os.path.join(UPLOAD_FOLDER, "post_photos")
 
 IS_PRODUCTION = os.environ.get("FLASK_ENV", "development") == "production"
 
@@ -109,6 +112,11 @@ STORY_CLEANUP_INTERVAL_SECONDS = 15 * 60
 # Sane ceiling so one account can't spam an unbounded number of simultaneous
 # active stories.
 MAX_ACTIVE_STORIES_PER_USER = 20
+# Feed posts: text and/or photo, permanent (unlike stories), with likes,
+# comments, and a share counter.
+POST_TEXT_MAX_LENGTH = 2000
+POST_COMMENT_MAX_LENGTH = 500
+POST_FEED_PAGE_SIZE = 10
 # Verification badge: how many *consecutive* calendar days a user needs to
 # have been online (at least once each day) before the account is
 # auto-verified. See record_daily_activity() for the streak bookkeeping.
@@ -157,6 +165,7 @@ app.config["REMEMBER_COOKIE_SECURE"] = IS_PRODUCTION
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(CHAT_PHOTOS_FOLDER, exist_ok=True)
 os.makedirs(STORY_PHOTOS_FOLDER, exist_ok=True)
+os.makedirs(POST_PHOTOS_FOLDER, exist_ok=True)
 
 db = SQLAlchemy(app)
 
@@ -423,6 +432,108 @@ class MessageReaction(db.Model):
 
     def __repr__(self):
         return f"<MessageReaction message={self.message_id} user={self.user_id} emoji={self.emoji}>"
+
+
+class Post(db.Model):
+    """A single feed post. Unlike Story, a post never expires and can be
+    text-only, photo-only, or both (at least one of the two is required —
+    enforced in the route, not here). Visible to every user, same as a
+    normal social news feed."""
+    __tablename__ = "posts"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    text = db.Column(db.Text, nullable=True)
+    # Filename only (relative to static/uploads/post_photos/), same storage
+    # convention as Story.image_path.
+    image_path = db.Column(db.String(255), nullable=True)
+    share_count = db.Column(db.Integer, default=0, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    user = db.relationship(
+        "User", backref=db.backref("posts", lazy="dynamic", cascade="all, delete-orphan")
+    )
+
+    def to_dict(self, viewer_id=None):
+        liked_by_me = (
+            viewer_id is not None
+            and self.likes.filter_by(user_id=viewer_id).first() is not None
+        )
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "username": self.user.username,
+            "full_name": self.user.full_name,
+            "profile_pic": self.user.profile_pic,
+            "text": self.text,
+            "image_url": (
+                url_for("static", filename=f"uploads/post_photos/{self.image_path}")
+                if self.image_path else None
+            ),
+            "created_at": to_iso_utc(self.created_at),
+            "like_count": self.likes.count(),
+            "liked_by_me": liked_by_me,
+            "comment_count": self.comments.count(),
+            "share_count": self.share_count,
+        }
+
+    def __repr__(self):
+        return f"<Post {self.id} by {self.user_id}>"
+
+
+class PostLike(db.Model):
+    """One like per user per post — sending it again removes it, same
+    toggle behavior as StoryReaction."""
+    __tablename__ = "post_likes"
+
+    id = db.Column(db.Integer, primary_key=True)
+    post_id = db.Column(db.Integer, db.ForeignKey("posts.id"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    post = db.relationship(
+        "Post", backref=db.backref("likes", lazy="dynamic", cascade="all, delete-orphan")
+    )
+    liker = db.relationship("User")
+
+    __table_args__ = (
+        db.UniqueConstraint("post_id", "user_id", name="uq_post_like_user"),
+    )
+
+    def __repr__(self):
+        return f"<PostLike post={self.post_id} user={self.user_id}>"
+
+
+class PostComment(db.Model):
+    """A single comment on a post. Posts support unlimited comments,
+    unlike stories which have no comment feature at all."""
+    __tablename__ = "post_comments"
+
+    id = db.Column(db.Integer, primary_key=True)
+    post_id = db.Column(db.Integer, db.ForeignKey("posts.id"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    text = db.Column(db.String(500), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    post = db.relationship(
+        "Post", backref=db.backref("comments", lazy="dynamic", cascade="all, delete-orphan")
+    )
+    author = db.relationship("User")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "post_id": self.post_id,
+            "user_id": self.user_id,
+            "username": self.author.username,
+            "full_name": self.author.full_name,
+            "profile_pic": self.author.profile_pic,
+            "text": self.text,
+            "created_at": to_iso_utc(self.created_at),
+        }
+
+    def __repr__(self):
+        return f"<PostComment {self.id} on post={self.post_id}>"
 
 
 class Group(db.Model):
@@ -2377,6 +2488,233 @@ def story_reactors(story_id):
             for u in reactors
         ]
     }), 200
+
+
+# -------------------------------------------------------------------
+# Feed posts — text and/or photo, permanent, with likes/comments/shares.
+# Unlike stories these never expire and are visible to every user, the
+# same audience as a normal public news feed.
+# -------------------------------------------------------------------
+@app.route("/api/posts", methods=["GET"])
+@login_required
+def list_posts():
+    """Cursor-paginated: pass ?before_id=<id> to fetch the page of posts
+    older than that id. Without it, returns the newest page. Ordered
+    newest-first so the swipeable feed always opens on the latest post."""
+    before_id = request.args.get("before_id", type=int)
+
+    query = Post.query
+    if before_id:
+        query = query.filter(Post.id < before_id)
+
+    posts = query.order_by(Post.id.desc()).limit(POST_FEED_PAGE_SIZE).all()
+
+    return jsonify({
+        "posts": [p.to_dict(viewer_id=current_user.id) for p in posts],
+        "has_more": len(posts) == POST_FEED_PAGE_SIZE,
+    }), 200
+
+
+@app.route("/api/posts", methods=["POST"])
+@login_required
+@limiter.limit("30 per hour")
+def create_post():
+    """Accepts multipart/form-data with an optional 'text' field and an
+    optional 'file' field — at least one of the two is required, so a
+    post is never completely empty."""
+    text = (request.form.get("text") or "").strip()
+    file = request.files.get("file")
+    has_file = file is not None and file.filename != ""
+
+    if not text and not has_file:
+        return jsonify({"error": "A post needs text, a photo, or both."}), 400
+
+    if len(text) > POST_TEXT_MAX_LENGTH:
+        return jsonify({"error": f"Post text can't exceed {POST_TEXT_MAX_LENGTH} characters."}), 400
+
+    unique_name = None
+    if has_file:
+        if not allowed_file(file.filename):
+            return jsonify({"error": "Unsupported file type. Use PNG, JPG, GIF, or WEBP."}), 400
+
+        original_name = secure_filename(file.filename)
+        ext = original_name.rsplit(".", 1)[1].lower()
+        unique_name = f"{current_user.id}_{uuid.uuid4().hex}.{ext}"
+        filepath = os.path.join(POST_PHOTOS_FOLDER, unique_name)
+
+        try:
+            file.save(filepath)
+        except OSError:
+            logger.exception("Failed to save uploaded post photo")
+            return jsonify({"error": "Could not save the uploaded file."}), 500
+
+        if not verify_is_real_image(filepath):
+            try:
+                os.remove(filepath)
+            except OSError:
+                pass
+            return jsonify({"error": "The uploaded file is not a valid image."}), 400
+
+    post = Post(user_id=current_user.id, text=text or None, image_path=unique_name)
+
+    try:
+        db.session.add(post)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        if unique_name:
+            try:
+                os.remove(os.path.join(POST_PHOTOS_FOLDER, unique_name))
+            except OSError:
+                pass
+        logger.exception("Failed to save post")
+        return jsonify({"error": "Could not create post. Please try again."}), 500
+
+    payload = post.to_dict(viewer_id=current_user.id)
+    # Broadcast to every connected client — the feed is public, unlike
+    # stories which only fan out to conversation partners.
+    socketio.emit("new_post", payload)
+
+    return jsonify({"message": "Post created.", "data": payload}), 201
+
+
+@app.route("/api/posts/<int:post_id>", methods=["DELETE"])
+@login_required
+def delete_post(post_id):
+    post = Post.query.get(post_id)
+    if not post:
+        return jsonify({"error": "Post not found."}), 404
+    if post.user_id != current_user.id:
+        return jsonify({"error": "You can only delete your own posts."}), 403
+
+    image_path = post.image_path
+
+    try:
+        db.session.delete(post)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to delete post")
+        return jsonify({"error": "Could not delete post. Please try again."}), 500
+
+    if image_path:
+        filepath = os.path.join(POST_PHOTOS_FOLDER, image_path)
+        try:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+        except OSError:
+            logger.warning("Could not remove deleted post image: %s", image_path)
+
+    socketio.emit("post_deleted", {"post_id": post_id})
+
+    return jsonify({"message": "Post deleted."}), 200
+
+
+@app.route("/api/posts/<int:post_id>/like", methods=["POST"])
+@login_required
+@limiter.limit("300 per hour")
+def like_post(post_id):
+    """Toggles a like on this post for the current user — send it again
+    to un-like, same toggle pattern as react_to_story."""
+    post = Post.query.get(post_id)
+    if not post:
+        return jsonify({"error": "Post not found."}), 404
+
+    existing = PostLike.query.filter_by(post_id=post_id, user_id=current_user.id).first()
+
+    try:
+        if existing:
+            db.session.delete(existing)
+            liked = False
+        else:
+            db.session.add(PostLike(post_id=post_id, user_id=current_user.id))
+            liked = True
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to toggle post like")
+        return jsonify({"error": "Could not update like. Please try again."}), 500
+
+    like_count = post.likes.count()
+
+    socketio.emit("post_liked", {
+        "post_id": post_id,
+        "liker_id": current_user.id,
+        "liker_username": current_user.username,
+        "liked": liked,
+        "like_count": like_count,
+    })
+
+    return jsonify({"liked": liked, "like_count": like_count}), 200
+
+
+@app.route("/api/posts/<int:post_id>/comments", methods=["GET"])
+@login_required
+def list_post_comments(post_id):
+    post = Post.query.get(post_id)
+    if not post:
+        return jsonify({"error": "Post not found."}), 404
+
+    comments = post.comments.order_by(PostComment.created_at.asc()).all()
+    return jsonify({"comments": [c.to_dict() for c in comments]}), 200
+
+
+@app.route("/api/posts/<int:post_id>/comments", methods=["POST"])
+@login_required
+@limiter.limit("120 per hour")
+def add_post_comment(post_id):
+    post = Post.query.get(post_id)
+    if not post:
+        return jsonify({"error": "Post not found."}), 404
+
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "Comment can't be empty."}), 400
+    if len(text) > POST_COMMENT_MAX_LENGTH:
+        return jsonify({"error": f"Comment can't exceed {POST_COMMENT_MAX_LENGTH} characters."}), 400
+
+    comment = PostComment(post_id=post_id, user_id=current_user.id, text=text)
+
+    try:
+        db.session.add(comment)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to save post comment")
+        return jsonify({"error": "Could not post comment. Please try again."}), 500
+
+    payload = comment.to_dict()
+    payload["comment_count"] = post.comments.count()
+
+    socketio.emit("post_commented", payload)
+
+    return jsonify({"message": "Comment posted.", "data": payload}), 201
+
+
+@app.route("/api/posts/<int:post_id>/share", methods=["POST"])
+@login_required
+@limiter.limit("120 per hour")
+def share_post(post_id):
+    """Just increments a counter — the actual share action (native share
+    sheet or copy-link) happens client-side; this is what makes the
+    share count visible to everyone else."""
+    post = Post.query.get(post_id)
+    if not post:
+        return jsonify({"error": "Post not found."}), 404
+
+    post.share_count = (post.share_count or 0) + 1
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to record post share")
+        return jsonify({"error": "Could not record share. Please try again."}), 500
+
+    socketio.emit("post_shared", {"post_id": post_id, "share_count": post.share_count})
+
+    return jsonify({"share_count": post.share_count}), 200
 
 
 def _story_cleanup_loop():
