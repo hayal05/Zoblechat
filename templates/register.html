@@ -88,6 +88,10 @@
             phone: contactMethod === "phone" ? phoneInput.value.trim() : "",
         };
 
+        const submitBtn = document.querySelector("#registerForm button[type=submit]");
+        submitBtn.disabled = true;
+        submitBtn.classList.add("is-loading");
+
         try {
             const res = await fetch("/api/register", {
                 method: "POST",
@@ -102,10 +106,17 @@
                 return;
             }
 
+            // Left in its loading state on success — the page is about to
+            // navigate away, so there's no "done" moment to reset it at.
             window.location.href = "/";
         } catch (err) {
             errorEl.textContent = "Network error. Please try again.";
             errorEl.hidden = false;
+        } finally {
+            if (!errorEl.hidden) {
+                submitBtn.disabled = false;
+                submitBtn.classList.remove("is-loading");
+            }
         }
     });
 </script>
