@@ -56,6 +56,7 @@
                     <line x1="8" y1="12" x2="16" y2="12"></line>
                     <line x1="8" y1="16" x2="12" y2="16"></line>
                 </svg>
+                <span class="feed-unread-badge" id="feedUnreadBadge" hidden></span>
             </button>
 
             <!-- Profile now lives top-right, level with the search bar -->
@@ -503,12 +504,7 @@
         <div class="feed-viewer" id="feedViewer">
             <header class="feed-header">
                 <span class="feed-header-title">News Feed</span>
-                <button class="btn-icon feed-close" id="feedCloseBtn" title="Close" type="button">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
+                <span class="feed-header-hint">Swipe right to close</span>
             </header>
 
             <!-- Vertical scroll list — native scroll up/down, just like a
@@ -598,6 +594,7 @@
 
 <script>
     const CURRENT_USER_ID = {{ current_user_data.id }};
+    const FEED_UNREAD_COUNT_INITIAL = {{ feed_unread_count }};
 
     const appShell = document.querySelector(".app-shell");
     const chatList = document.getElementById("chatList");
@@ -1358,10 +1355,11 @@
     // as the story viewer.
     // ---------------------------------------------------------------
     const feedNavBtn = document.getElementById("feedNavBtn");
+    const feedUnreadBadge = document.getElementById("feedUnreadBadge");
     const feedBackdrop = document.getElementById("feedBackdrop");
+    const feedViewer = document.getElementById("feedViewer");
     const feedTrack = document.getElementById("feedTrack");
     const feedEmpty = document.getElementById("feedEmpty");
-    const feedCloseBtn = document.getElementById("feedCloseBtn");
     const feedComposeFab = document.getElementById("feedComposeFab");
     const feedCommentsDrawer = document.getElementById("feedCommentsDrawer");
     const feedCommentsList = document.getElementById("feedCommentsList");
@@ -1388,6 +1386,42 @@
     let feedComposeFile = null;
     let activeCommentsPostId = null;
     let feedScrollDebounce = null;
+    let feedUnreadCount = FEED_UNREAD_COUNT_INITIAL;
+
+    // Feed unread badge — mirrors bumpUnreadBadge()'s "10+" style cap, just
+    // capped lower (10 instead of 99) since the feed nav icon is small and
+    // this is a single shared counter rather than one per conversation.
+    function renderFeedUnreadBadge() {
+        if (feedUnreadCount <= 0) {
+            feedUnreadBadge.hidden = true;
+            return;
+        }
+        feedUnreadBadge.hidden = false;
+        feedUnreadBadge.textContent = feedUnreadCount > 10 ? "10+" : String(feedUnreadCount);
+    }
+
+    function bumpFeedUnreadBadge() {
+        feedUnreadCount += 1;
+        renderFeedUnreadBadge();
+        feedUnreadBadge.classList.remove("badge-pop");
+        void feedUnreadBadge.offsetWidth; // restart animation
+        feedUnreadBadge.classList.add("badge-pop");
+    }
+
+    async function markFeedSeen() {
+        if (feedUnreadCount === 0) return;
+        feedUnreadCount = 0;
+        renderFeedUnreadBadge();
+        try {
+            await fetch("/api/posts/mark-seen", { method: "POST" });
+        } catch (err) {
+            // Badge already cleared locally — worst case the server-side
+            // watermark catches up next time this succeeds. Fail quietly,
+            // same as the rest of the feed's network calls.
+        }
+    }
+
+    renderFeedUnreadBadge(); // seed from the server-rendered count on load
 
     function feedTimeAgo(iso) {
         const diffMs = Date.now() - new Date(iso).getTime();
@@ -1498,23 +1532,89 @@
     function openFeed() {
         const wasClosed = feedBackdrop.hidden;
         feedBackdrop.hidden = false;
+        feedSwipeReset();
         if (wasClosed) openOverlay("feed", closeFeed);
         if (!feedLoadedOnce) {
             feedLoadedOnce = true;
             loadFeedPage(true);
         }
+        markFeedSeen();
     }
 
     function closeFeed() {
         feedBackdrop.hidden = true;
+        feedSwipeReset();
         closeCommentsDrawer();
     }
 
     feedNavBtn.addEventListener("click", openFeed);
-    feedCloseBtn.addEventListener("click", () => closeOverlay("feed"));
-    feedBackdrop.addEventListener("click", (e) => {
-        if (e.target === feedBackdrop) closeOverlay("feed");
+
+    // Swipe-to-close (right only) — this is the only way to dismiss the
+    // feed now that it sits underneath the persistent header/stories
+    // strip, so there's no backdrop to tap and no X button. A drag that
+    // moves clearly more horizontally than vertically, and to the
+    // right, drags the whole feed plate off-screen; anything else
+    // (vertical scrolling, left drags, taps) is left alone.
+    let feedSwipeStartX = null;
+    let feedSwipeStartY = null;
+    let feedSwipeDeltaX = 0;
+    let feedSwipeTracking = false;
+    let feedSwipeActive = false;
+
+    function feedSwipeReset() {
+        feedViewer.style.transition = "";
+        feedViewer.style.transform = "";
+        feedViewer.style.opacity = "";
+    }
+
+    feedViewer.addEventListener("pointerdown", (e) => {
+        if (e.pointerType === "mouse" && e.button !== 0) return;
+        // Don't hijack gestures that start on controls, or inside the
+        // comments drawer / compose modal, which have their own scroll.
+        if (e.target.closest("button, input, textarea, a, .feed-comments-drawer")) return;
+        feedSwipeStartX = e.clientX;
+        feedSwipeStartY = e.clientY;
+        feedSwipeDeltaX = 0;
+        feedSwipeTracking = true;
+        feedSwipeActive = false;
     });
+
+    feedViewer.addEventListener("pointermove", (e) => {
+        if (!feedSwipeTracking) return;
+        const dx = e.clientX - feedSwipeStartX;
+        const dy = e.clientY - feedSwipeStartY;
+        if (!feedSwipeActive) {
+            if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+            if (dx > 0 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+                feedSwipeActive = true;
+            } else {
+                feedSwipeTracking = false;
+                return;
+            }
+        }
+        feedSwipeDeltaX = Math.max(0, dx);
+        feedViewer.style.transition = "none";
+        feedViewer.style.transform = `translateX(${feedSwipeDeltaX}px)`;
+        feedViewer.style.opacity = String(Math.max(1 - feedSwipeDeltaX / 400, 0.4));
+    });
+
+    function feedSwipeEnd() {
+        if (!feedSwipeTracking) return;
+        feedSwipeTracking = false;
+        if (feedSwipeActive && feedSwipeDeltaX > 90) {
+            feedViewer.style.transition = "transform 0.18s var(--ease), opacity 0.18s var(--ease)";
+            feedViewer.style.transform = "translateX(100%)";
+            feedViewer.style.opacity = "0";
+            setTimeout(() => closeOverlay("feed"), 160);
+        } else {
+            feedSwipeReset();
+        }
+        feedSwipeActive = false;
+        feedSwipeStartX = null;
+    }
+
+    feedViewer.addEventListener("pointerup", feedSwipeEnd);
+    feedViewer.addEventListener("pointercancel", feedSwipeEnd);
 
     // Plain vertical scrolling, native up/down like any normal feed —
     // this just loads the next page a little before the user runs out
@@ -3555,7 +3655,16 @@
     });
 
     // ---- Feed (news feed) realtime sync ----
-    socket.on("new_post", (payload) => addPostToFeedFront(payload));
+    socket.on("new_post", (payload) => {
+        addPostToFeedFront(payload);
+        // Someone else's post landing while the feed is closed is what
+        // "unread" means here — if the feed is already open the new card
+        // just appeared on screen (addPostToFeedFront above), so there's
+        // nothing unseen to count.
+        if (payload.user_id !== CURRENT_USER_ID && feedBackdrop.hidden) {
+            bumpFeedUnreadBadge();
+        }
+    });
 
     socket.on("post_deleted", (payload) => removePostFromFeed(payload.post_id));
 
