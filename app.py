@@ -15,7 +15,10 @@ eventlet.monkey_patch()
 import os
 import re
 import uuid
+import secrets
+import smtplib
 import logging
+from email.mime.text import MIMEText
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -127,6 +130,28 @@ VERIFICATION_STREAK_DAYS = 3
 # per message — see MessageReaction for the toggle/swap semantics.
 ALLOWED_REACTION_EMOJIS = {"❤️", "😂", "😮", "😢", "👍", "🙏"}
 
+# Email verification (OTP): registration no longer creates an account
+# directly — it first emails a 6-digit code to the address entered, and
+# the account is only created once that code is confirmed. See
+# PendingRegistration below and /api/register/start, /api/register/verify.
+OTP_LENGTH = 6
+OTP_EXPIRY_MINUTES = 10
+OTP_MAX_ATTEMPTS = 5
+OTP_RESEND_COOLDOWN_SECONDS = 45
+
+# -------------------------------------------------------------------
+# Outbound email (verification codes only)
+# -------------------------------------------------------------------
+# All optional at the config level: if SMTP_HOST isn't set, send_otp_email()
+# logs the code instead of emailing it, so local development never needs
+# real mail credentials just to exercise the signup flow.
+SMTP_HOST = os.environ.get("SMTP_HOST")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USERNAME = os.environ.get("SMTP_USERNAME")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
+SMTP_FROM = os.environ.get("SMTP_FROM", "no-reply@zoble.chat")
+SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").lower() != "false"
+
 # -------------------------------------------------------------------
 # App Configuration
 # -------------------------------------------------------------------
@@ -218,11 +243,10 @@ class User(db.Model, UserMixin):
 
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(30), unique=True, nullable=False, index=True)
-    # A user registers with EITHER an email OR a phone number (not necessarily
-    # both), so both are nullable at the DB level — enforcing "at least one of
-    # the two is present" is done in the /api/register validation instead of
-    # a DB-level constraint, since SQLite's ALTER TABLE support makes adding a
-    # CHECK constraint to an existing table impractical for the migration below.
+    # Every new signup now goes through /api/register/start + verify, which
+    # always collects (and OTP-verifies) an email — phone stays nullable
+    # only because older accounts registered with a phone number instead,
+    # back when that was still an option.
     email = db.Column(db.String(255), unique=True, nullable=True, index=True)
     phone = db.Column(db.String(20), unique=True, nullable=True, index=True)
     full_name = db.Column(db.String(FULL_NAME_MAX_LENGTH), nullable=False)
@@ -236,7 +260,7 @@ class User(db.Model, UserMixin):
 
     # -- Verification badge / admin -----------------------------------
     # is_admin: only ever true for the very first account ever created
-    # (see /api/register) — there's no promotion path beyond that today.
+    # (see /api/register/verify) — there's no promotion path beyond that today.
     is_admin = db.Column(db.Boolean, nullable=False, default=False)
     # is_verified: true once either (a) the account is the admin account,
     # auto-granted at registration, or (b) the account has been online at
@@ -299,6 +323,44 @@ class User(db.Model, UserMixin):
 
     def __repr__(self):
         return f"<User {self.username}>"
+
+
+class PendingRegistration(db.Model):
+    """A signup that hasn't been confirmed yet. Registration is now two
+    steps: /api/register/start collects name/email/password and emails a
+    code, storing everything needed to finish the job here; /api/register/
+    verify checks the code and only THEN creates the real User row. Kept
+    in the database (not an in-memory dict) so a pending signup survives a
+    worker restart between the two requests.
+
+    One row per email — starting a new signup for an email that already
+    has a pending row replaces it (see /api/register/start), so a stale
+    or abandoned attempt can never block a retry.
+    """
+    __tablename__ = "pending_registrations"
+
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    full_name = db.Column(db.String(FULL_NAME_MAX_LENGTH), nullable=False)
+    # Hashed immediately on submit, same as a real User — a pending row is
+    # never storing anyone's password in the clear.
+    password_hash = db.Column(db.String(255), nullable=False)
+    otp_code = db.Column(db.String(OTP_LENGTH), nullable=False)
+    otp_expires_at = db.Column(db.DateTime, nullable=False)
+    # Wrong-code guesses against this row. Hitting OTP_MAX_ATTEMPTS forces a
+    # fresh code (see /api/register/verify) instead of allowing unlimited
+    # brute-force attempts against a 6-digit space.
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    # Backs the resend cooldown — /api/register/resend refuses to fire off
+    # another email until OTP_RESEND_COOLDOWN_SECONDS after this.
+    last_sent_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    def is_expired(self):
+        return datetime.utcnow() > self.otp_expires_at
+
+    def __repr__(self):
+        return f"<PendingRegistration {self.email}>"
 
 
 class Message(db.Model):
@@ -873,6 +935,68 @@ def validate_full_name(full_name):
     return None
 
 
+def generate_otp_code():
+    """A cryptographically random 6-digit code (zero-padded, so it's always
+    OTP_LENGTH digits) — secrets.randbelow rather than random.randint since
+    this gates account creation."""
+    return f"{secrets.randbelow(10 ** OTP_LENGTH):0{OTP_LENGTH}d}"
+
+
+def send_otp_email(to_email, code, full_name):
+    """Emails a verification code for the signup flow. Falls back to just
+    logging the code when SMTP_HOST isn't configured, so local development
+    and this project's own tests can exercise registration without real
+    mail credentials — see the SMTP_* constants above.
+
+    Raises on a genuine send failure so the caller can surface a real error
+    to the person instead of silently leaving them stuck waiting on an
+    email that never arrives.
+    """
+    subject = "Your Zoble verification code"
+    body = (
+        f"Hi {full_name},\n\n"
+        f"Your Zoble verification code is: {code}\n\n"
+        f"This code expires in {OTP_EXPIRY_MINUTES} minutes. If you didn't "
+        f"try to sign up for Zoble, you can ignore this email.\n"
+    )
+
+    if not SMTP_HOST:
+        logger.info("[DEV] Verification code for %s: %s (no SMTP_HOST configured)", to_email, code)
+        return
+
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_email
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+        if SMTP_USE_TLS:
+            server.starttls()
+        if SMTP_USERNAME and SMTP_PASSWORD:
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.sendmail(SMTP_FROM, [to_email], msg.as_string())
+
+
+def generate_unique_username(email, full_name):
+    """Registration no longer asks for a username — one is derived
+    automatically from the email's local part (falling back to the name)
+    so the rest of the app, which identifies people by username in search,
+    mentions, and chat rows, keeps working unchanged. Collisions just get a
+    numeric suffix appended, same idea as how most social apps mint a
+    default handle."""
+    source = (email.split("@")[0] if email else "") or full_name or "user"
+    base = re.sub(r"[^A-Za-z0-9_.]", "", source).lower()[:24]
+    if len(base) < 3:
+        base = (base + secrets.token_hex(3))[:24]
+
+    candidate = base
+    suffix = 0
+    while User.query.filter(func.lower(User.username) == candidate.lower()).first():
+        suffix += 1
+        candidate = f"{base}{suffix}"[:30]
+    return candidate
+
+
 def verify_is_real_image(filepath):
     """Confirms the uploaded file is actually a valid image (not just a
     file with a spoofed .png/.jpg extension), and that it isn't an
@@ -1207,100 +1331,175 @@ def register_page():
 # -------------------------------------------------------------------
 # Authentication API Routes (JSON)
 # -------------------------------------------------------------------
-@app.route("/api/register", methods=["POST"])
-@limiter.limit("10 per minute")
-def register():
+@app.route("/api/register/start", methods=["POST"])
+@limiter.limit("6 per hour")
+def register_start():
+    """Step 1 of signup: validate name/email/password, email a 6-digit
+    code, and stash everything needed to finish the job in
+    PendingRegistration. No User row exists yet — that only happens once
+    the code is confirmed in /api/register/verify. There's no username
+    field here anymore; one is generated automatically once the account
+    is actually created."""
     data = request.get_json(silent=True) or request.form
 
-    username = (data.get("username") or "").strip()
     full_name = (data.get("full_name") or "").strip()
+    email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
-
-    # The client tells us which contact method it's collecting so we know
-    # which single field to validate/store — but we don't actually trust
-    # that label on its own; whichever of email/phone was actually filled
-    # in wins, and it's an error if both or neither were provided.
-    contact_method = (data.get("contact_method") or "").strip().lower()
-    email_raw = (data.get("email") or "").strip().lower()
-    phone_raw = normalize_phone(data.get("phone") or "")
-
-    if contact_method not in ("email", "phone"):
-        # Infer from whichever field is actually filled in, so older clients
-        # that only ever sent "email" keep working unchanged.
-        contact_method = "phone" if phone_raw and not email_raw else "email"
-
-    if email_raw and phone_raw:
-        return jsonify({"error": "Please register with either an email or a phone number, not both."}), 400
-
-    email = None
-    phone = None
-
-    if contact_method == "phone":
-        phone_error = validate_phone(phone_raw)
-        if phone_error:
-            return jsonify({"error": phone_error}), 400
-        phone = phone_raw
-    else:
-        email_error = validate_email(email_raw)
-        if email_error:
-            return jsonify({"error": email_error}), 400
-        email = email_raw
-
-    username_error = validate_username(username)
-    if username_error:
-        return jsonify({"error": username_error}), 400
 
     full_name_error = validate_full_name(full_name)
     if full_name_error:
         return jsonify({"error": full_name_error}), 400
 
+    email_error = validate_email(email)
+    if email_error:
+        return jsonify({"error": email_error}), 400
+
     password_error = validate_password(password)
     if password_error:
         return jsonify({"error": password_error}), 400
 
-    # Case-insensitive uniqueness checks avoid "Alice" vs "alice" (and
-    # "A@x.com" vs "a@x.com") collisions.
-    if User.query.filter(func.lower(User.username) == username.lower()).first():
-        return jsonify({"error": "Username already taken."}), 409
-
-    if email and User.query.filter(func.lower(User.email) == email).first():
+    if User.query.filter(func.lower(User.email) == email).first():
         return jsonify({"error": "An account with that email already exists."}), 409
 
-    if phone and User.query.filter(User.phone == phone).first():
-        return jsonify({"error": "An account with that phone number already exists."}), 409
+    now = datetime.utcnow()
+    code = generate_otp_code()
 
-    # The very first account ever created on this deployment is auto-verified
-    # and promoted to admin immediately. In the extremely unlikely case of two
-    # registration requests overlapping in the same instant (this app runs a
-    # single worker, so that would take two concurrent requests racing before
-    # either commits), both could observe an empty table and both could end
-    # up admin — an acceptable edge case here given how rare a truly
-    # simultaneous "first ever" signup is, but worth knowing about if this
-    # app is ever scaled to multiple workers/processes.
+    try:
+        send_otp_email(email, code, full_name)
+    except Exception:
+        logger.exception("Failed to send verification email to %s", email)
+        return jsonify({"error": "Could not send verification email. Please try again."}), 502
+
+    try:
+        # Starting a new signup for this email replaces any previous
+        # pending attempt (abandoned, expired, or otherwise) rather than
+        # erroring on the unique constraint — a person retrying a typo'd
+        # signup shouldn't get stuck.
+        pending = PendingRegistration.query.filter_by(email=email).first()
+        if pending is None:
+            pending = PendingRegistration(email=email)
+            db.session.add(pending)
+
+        pending.full_name = full_name
+        pending.password_hash = generate_password_hash(password)
+        pending.otp_code = code
+        pending.otp_expires_at = now + timedelta(minutes=OTP_EXPIRY_MINUTES)
+        pending.attempts = 0
+        pending.last_sent_at = now
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to store pending registration for %s", email)
+        return jsonify({"error": "Something went wrong. Please try again."}), 500
+
+    logger.info("Verification code sent for pending registration: %s", email)
+    return jsonify({
+        "message": "Verification code sent.",
+        "email": email,
+        "expires_in_minutes": OTP_EXPIRY_MINUTES,
+    }), 200
+
+
+@app.route("/api/register/resend", methods=["POST"])
+@limiter.limit("6 per hour")
+def register_resend():
+    """Re-sends a fresh code for an in-progress signup, subject to a short
+    cooldown so the resend link can't be used to spam someone's inbox."""
+    data = request.get_json(silent=True) or request.form
+    email = (data.get("email") or "").strip().lower()
+
+    pending = PendingRegistration.query.filter_by(email=email).first()
+    if not pending:
+        return jsonify({"error": "No pending signup found for that email. Please start over."}), 404
+
+    seconds_since_last_send = (datetime.utcnow() - pending.last_sent_at).total_seconds()
+    if seconds_since_last_send < OTP_RESEND_COOLDOWN_SECONDS:
+        wait = int(OTP_RESEND_COOLDOWN_SECONDS - seconds_since_last_send)
+        return jsonify({"error": f"Please wait {wait}s before requesting another code.", "retry_after": wait}), 429
+
+    code = generate_otp_code()
+    try:
+        send_otp_email(email, code, pending.full_name)
+    except Exception:
+        logger.exception("Failed to resend verification email to %s", email)
+        return jsonify({"error": "Could not send verification email. Please try again."}), 502
+
+    try:
+        pending.otp_code = code
+        pending.otp_expires_at = datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
+        pending.attempts = 0
+        pending.last_sent_at = datetime.utcnow()
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to update pending registration for %s", email)
+        return jsonify({"error": "Something went wrong. Please try again."}), 500
+
+    return jsonify({"message": "Verification code sent.", "expires_in_minutes": OTP_EXPIRY_MINUTES}), 200
+
+
+@app.route("/api/register/verify", methods=["POST"])
+@limiter.limit("20 per hour")
+def register_verify():
+    """Step 2 of signup: checks the emailed code and, only once it's
+    correct, actually creates the User row (with an auto-generated
+    username — see generate_unique_username)."""
+    data = request.get_json(silent=True) or request.form
+    email = (data.get("email") or "").strip().lower()
+    code = (data.get("code") or "").strip()
+
+    pending = PendingRegistration.query.filter_by(email=email).first()
+    if not pending:
+        return jsonify({"error": "No pending signup found for that email. Please start over."}), 404
+
+    if pending.is_expired():
+        db.session.delete(pending)
+        db.session.commit()
+        return jsonify({"error": "That code has expired. Please request a new one."}), 410
+
+    if pending.attempts >= OTP_MAX_ATTEMPTS:
+        db.session.delete(pending)
+        db.session.commit()
+        return jsonify({"error": "Too many incorrect attempts. Please request a new code."}), 429
+
+    if not code or code != pending.otp_code:
+        pending.attempts += 1
+        db.session.commit()
+        remaining = max(OTP_MAX_ATTEMPTS - pending.attempts, 0)
+        return jsonify({"error": "Incorrect code.", "attempts_remaining": remaining}), 400
+
+    # Code matches — this is now a real, uniqueness-safe email (nobody else
+    # could have registered it while it sat pending, since /api/register/
+    # start already checked and this whole route only runs after that).
+    if User.query.filter(func.lower(User.email) == email).first():
+        db.session.delete(pending)
+        db.session.commit()
+        return jsonify({"error": "An account with that email already exists."}), 409
+
+    username = generate_unique_username(email, pending.full_name)
+
+    # Same first-account-ever admin/verified bootstrap as before — see the
+    # longer comment this used to have in the old single-step /api/register.
     is_first_account_ever = User.query.count() == 0
 
     try:
-        # No OTP/verification step — the account is created and usable
-        # immediately from the email/phone number as entered.
-        user = User(username=username, email=email, phone=phone, full_name=full_name)
-        user.set_password(password)
-        # Start the feed watermark at "now" rather than leaving it NULL, so a
-        # brand-new account doesn't immediately see every historical post as
-        # unread — only posts made after they joined.
+        user = User(username=username, email=email, full_name=pending.full_name)
+        user.password_hash = pending.password_hash
         user.last_feed_view_at = datetime.utcnow()
         if is_first_account_ever:
             user.is_admin = True
             user.is_verified = True
             user.verified_at = datetime.utcnow()
         db.session.add(user)
+        db.session.delete(pending)
         db.session.commit()
     except Exception:
         db.session.rollback()
-        logger.exception("Failed to create user")
+        logger.exception("Failed to create user after OTP verification")
         return jsonify({"error": "Could not create account. Please try again."}), 500
 
     login_user(user)
-    logger.info("New user registered: %s", user.username)
+    logger.info("New user registered (email verified): %s", user.username)
     return jsonify({"message": "Registered successfully.", "user": user.to_dict(include_email=True)}), 201
 
 
