@@ -568,6 +568,27 @@ a:focus-visible {
     flex-shrink: 0;
     box-shadow: 0 1px 3px rgba(255, 106, 26, 0.35);
 }
+/* Verification badge — a scalloped seal-and-checkmark icon (the rounded
+   12-point rosette shape used by Facebook/Telegram-style verified badges)
+   shown right after a user's name once their account has been
+   auto-verified (see backend: 3 consecutive active days, or the admin
+   account). Admin gets a gold tint instead of the standard brand-blue
+   tint so it reads as a step above plain verification, while still being
+   visually part of the same badge family. No text label is ever shown —
+   the icon alone sits inline immediately after the name. */
+.verified-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+    vertical-align: middle;
+    margin-left: 2px;
+}
+.verified-badge svg { width: 100%; height: 100%; }
+.verified-badge-user { color: #2B8FE0; }
+.verified-badge-admin { color: #C9971A; }
 .badge-pop { animation: badge-pop 0.28s var(--ease); }
 @keyframes badge-pop {
     0% { transform: scale(0.6); }
@@ -656,6 +677,7 @@ a:focus-visible {
     text-align: center;
     padding: 24px;
 }
+.chat-pane-empty[hidden] { display: none; }
 .empty-plate {
     width: 76px;
     height: 76px;
@@ -677,6 +699,7 @@ a:focus-visible {
     flex-direction: column;
     height: 100%;
 }
+.chat-pane-active[hidden] { display: none; }
 
 /* Header plate */
 .chat-header {
@@ -825,13 +848,155 @@ a:focus-visible {
     box-shadow: 0 2px 6px rgba(232, 93, 15, 0.22);
 }
 
-.msg-time {
-    display: block;
-    font-size: 11px;
+.msg-meta {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 3px;
     margin-top: 4px;
+}
+.msg-time {
+    font-size: 11px;
 }
 .msg-row.incoming .msg-time { color: var(--ink-faint); }
 .msg-row.outgoing .msg-time { color: rgba(255, 255, 255, 0.8); }
+
+/* Read receipts — a single check once a sent message has left the server,
+   becoming a double check (and a lighter tint) once the recipient has
+   actually opened the conversation and it's been marked read. Mirrors the
+   is_read flag the backend already tracks and broadcasts over Socket.IO
+   (see "messages_seen"), so this is purely a rendering of state the
+   server already maintains. */
+.msg-status {
+    display: inline-flex;
+    align-items: center;
+    color: rgba(255, 255, 255, 0.7);
+    line-height: 0;
+}
+.msg-status.read { color: #BEE9FF; }
+.msg-status-tick + .msg-status-tick { margin-left: -8px; }
+.msg-status-photo { color: var(--ink-faint); }
+.msg-status-photo.read { color: var(--brand); }
+
+/* ---------------------------------------------------------------------
+   Message reaction stickers — a fixed emoji set, one per user per message.
+   The react-trigger button sits beside the bubble (hidden until hover on
+   pointer devices, always dimly visible on touch), and reaction pills sit
+   in a small bar just under the bubble once at least one exists.
+   --------------------------------------------------------------------- */
+.msg-stack {
+    display: flex;
+    flex-direction: column;
+    max-width: 100%;
+}
+.msg-row.outgoing .msg-stack { align-items: flex-end; }
+.msg-row.incoming .msg-stack { align-items: flex-start; }
+
+.msg-bubble-group {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+}
+.msg-row.outgoing .msg-bubble-group { flex-direction: row-reverse; }
+
+.msg-react-trigger {
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    font-size: 14px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transform: scale(0.85);
+    transition: opacity 0.12s var(--ease), transform 0.12s var(--ease), background 0.12s var(--ease);
+}
+.msg-row:hover .msg-react-trigger,
+.msg-react-trigger:focus-visible {
+    opacity: 1;
+    transform: scale(1);
+}
+.msg-react-trigger:hover { background: var(--brand-tint); border-color: var(--brand-tint-strong); }
+
+/* Touch devices have no hover state, so keep the trigger faintly visible
+   rather than requiring an undiscoverable long-press. */
+@media (hover: none) {
+    .msg-react-trigger { opacity: 0.55; }
+}
+
+.msg-reactions-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+}
+.msg-reactions-bar[hidden] { display: none; }
+
+.msg-reaction-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-full);
+    font-size: 12px;
+    cursor: pointer;
+    box-shadow: var(--shadow-plate);
+    transition: transform 0.1s var(--ease), border-color 0.12s var(--ease);
+}
+.msg-reaction-pill:hover { transform: translateY(-1px); }
+.msg-reaction-pill-mine {
+    background: var(--brand-tint);
+    border-color: var(--brand);
+}
+.msg-reaction-emoji { font-size: 13px; line-height: 1; }
+.msg-reaction-count {
+    color: var(--ink-soft);
+    font-weight: 600;
+    font-size: 11px;
+}
+.msg-reaction-pill-mine .msg-reaction-count { color: var(--brand-dark); }
+
+/* Emoji picker popover — a single shared element repositioned via JS next
+   to whichever message's react-trigger was clicked; fixed positioning so
+   its coordinates line up with getBoundingClientRect() regardless of
+   where in the DOM it lives (it's appended directly to <body>). */
+.reaction-picker {
+    position: fixed;
+    z-index: 200;
+    display: flex;
+    gap: 2px;
+    padding: 6px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    box-shadow: var(--shadow-plate-lg);
+    animation: modal-fade-in 0.12s var(--ease) both;
+}
+.reaction-picker[hidden] { display: none; }
+.reaction-picker-option {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    font-size: 19px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 0.1s var(--ease), background 0.1s var(--ease);
+}
+.reaction-picker-option:hover {
+    background: var(--brand-tint);
+    transform: scale(1.18);
+}
 
 /* Day divider, if used when rendering history */
 .day-divider {
@@ -1000,9 +1165,7 @@ a:focus-visible {
 }
 .msg-photo:hover { transform: scale(1.01); }
 .msg-time-photo {
-    display: block;
     text-align: right;
-    margin-top: 4px;
     color: var(--ink-faint);
 }
 
