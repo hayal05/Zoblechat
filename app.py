@@ -249,6 +249,14 @@ class User(db.Model, UserMixin):
     # is about calendar days, not a rolling 24h window.
     activity_streak = db.Column(db.Integer, nullable=False, default=0)
     last_active_date = db.Column(db.Date, nullable=True)
+    # Last time this user opened the news feed overlay. Posts created after
+    # this timestamp (by someone else) count as "unread" for the little
+    # badge on the feed nav button — same idea as Message.is_read, just
+    # tracked as a single watermark instead of a per-row flag since the
+    # feed is one shared stream rather than per-conversation threads.
+    # NULL means "never opened the feed yet", so everything counts as
+    # unread until their first visit.
+    last_feed_view_at = db.Column(db.DateTime, nullable=True)
 
     sent_messages = db.relationship(
         "Message", foreign_keys="Message.sender_id", backref="sender", lazy="dynamic"
@@ -736,6 +744,19 @@ def _ensure_schema():
         with db.engine.begin() as conn:
             conn.execute(text("ALTER TABLE users ADD COLUMN last_active_date DATE"))
 
+    if "last_feed_view_at" not in existing_columns:
+        logger.info("Migrating users table: adding 'last_feed_view_at' column")
+        with db.engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN last_feed_view_at DATETIME"))
+            # Backfill existing accounts to "now" so upgrading doesn't dump a
+            # huge unread count on everyone for posts they'd already seen
+            # before this feature existed — only genuinely new posts from
+            # here on out should show as unread.
+            conn.execute(text(
+                "UPDATE users SET last_feed_view_at = CURRENT_TIMESTAMP "
+                "WHERE last_feed_view_at IS NULL"
+            ))
+
     if "messages" in inspector.get_table_names():
         existing_message_columns = {col["name"] for col in inspector.get_columns("messages")}
 
@@ -1114,6 +1135,7 @@ def index():
         "chat.html",
         current_user_data=current_user.to_dict(include_email=True),
         users=users_payload,
+        feed_unread_count=get_feed_unread_count(current_user.id, current_user.last_feed_view_at),
     ))
 
 
@@ -1229,6 +1251,10 @@ def register():
         # immediately from the email/phone number as entered.
         user = User(username=username, email=email, phone=phone, full_name=full_name)
         user.set_password(password)
+        # Start the feed watermark at "now" rather than leaving it NULL, so a
+        # brand-new account doesn't immediately see every historical post as
+        # unread — only posts made after they joined.
+        user.last_feed_view_at = datetime.utcnow()
         if is_first_account_ever:
             user.is_admin = True
             user.is_verified = True
@@ -2495,6 +2521,42 @@ def story_reactors(story_id):
 # Unlike stories these never expire and are visible to every user, the
 # same audience as a normal public news feed.
 # -------------------------------------------------------------------
+def get_feed_unread_count(user_id, since):
+    """Count of feed posts by other users created after `since` (a user's
+    last_feed_view_at watermark, or None if they've never opened the feed
+    yet, in which case every post by someone else counts)."""
+    query = Post.query.filter(Post.user_id != user_id)
+    if since is not None:
+        query = query.filter(Post.created_at > since)
+    return query.count()
+
+
+@app.route("/api/posts/unread-count", methods=["GET"])
+@login_required
+def feed_unread_count():
+    """Lightweight poll endpoint for the feed badge — lets the client
+    resync (e.g. after reconnecting) instead of trusting only the running
+    client-side tally built from Socket.IO events."""
+    count = get_feed_unread_count(current_user.id, current_user.last_feed_view_at)
+    return jsonify({"unread_count": count}), 200
+
+
+@app.route("/api/posts/mark-seen", methods=["POST"])
+@login_required
+def mark_feed_seen():
+    """Called when the user opens the feed overlay — resets their unread
+    watermark to now, same moment as when the feed's contents are actually
+    on screen in front of them."""
+    current_user.last_feed_view_at = datetime.utcnow()
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to update last_feed_view_at")
+        return jsonify({"error": "Could not update feed status."}), 500
+    return jsonify({"message": "Feed marked as seen."}), 200
+
+
 @app.route("/api/posts", methods=["GET"])
 @login_required
 def list_posts():
