@@ -36,7 +36,7 @@ def to_iso_utc(dt):
     return dt.isoformat() + "Z" if dt else None
 
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, redirect, url_for, render_template
+from flask import Flask, request, jsonify, redirect, url_for, render_template, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import (
     LoginManager, UserMixin, login_user, logout_user,
@@ -870,6 +870,7 @@ def _no_store(response):
     login_page/register_page routes' `if current_user.is_authenticated`
     check always re-runs and bounces a logged-in user straight back to
     the chat, and index() always re-runs @login_required correctly too."""
+    response = make_response(response)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
