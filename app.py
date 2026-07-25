@@ -109,6 +109,15 @@ STORY_CLEANUP_INTERVAL_SECONDS = 15 * 60
 # Sane ceiling so one account can't spam an unbounded number of simultaneous
 # active stories.
 MAX_ACTIVE_STORIES_PER_USER = 20
+# Verification badge: how many *consecutive* calendar days a user needs to
+# have been online (at least once each day) before the account is
+# auto-verified. See record_daily_activity() for the streak bookkeeping.
+VERIFICATION_STREAK_DAYS = 3
+# Message reaction stickers: a fixed set rather than free-form emoji input,
+# so the reactions bar under a bubble stays a small, recognizable row
+# instead of turning into an open-ended emoji picker. One reaction per user
+# per message — see MessageReaction for the toggle/swap semantics.
+ALLOWED_REACTION_EMOJIS = {"❤️", "😂", "😮", "😢", "👍", "🙏"}
 
 # -------------------------------------------------------------------
 # App Configuration
@@ -216,6 +225,22 @@ class User(db.Model, UserMixin):
     # new account) rather than "was seen at time zero".
     last_seen = db.Column(db.DateTime, nullable=True)
 
+    # -- Verification badge / admin -----------------------------------
+    # is_admin: only ever true for the very first account ever created
+    # (see /api/register) — there's no promotion path beyond that today.
+    is_admin = db.Column(db.Boolean, nullable=False, default=False)
+    # is_verified: true once either (a) the account is the admin account,
+    # auto-granted at registration, or (b) the account has been online at
+    # least once on each of VERIFICATION_STREAK_DAYS consecutive calendar
+    # days (see record_daily_activity()).
+    is_verified = db.Column(db.Boolean, nullable=False, default=False)
+    verified_at = db.Column(db.DateTime, nullable=True)
+    # activity_streak / last_active_date: bookkeeping for the consecutive-day
+    # check above. last_active_date is a DATE (not datetime) since the streak
+    # is about calendar days, not a rolling 24h window.
+    activity_streak = db.Column(db.Integer, nullable=False, default=0)
+    last_active_date = db.Column(db.Date, nullable=True)
+
     sent_messages = db.relationship(
         "Message", foreign_keys="Message.sender_id", backref="sender", lazy="dynamic"
     )
@@ -235,6 +260,11 @@ class User(db.Model, UserMixin):
             "username": self.username,
             "full_name": self.full_name,
             "profile_pic": self.profile_pic,
+            # Badge flags are not sensitive — shown next to a user's name for
+            # anyone who can see that name at all, same as WhatsApp/Twitter
+            # verification checkmarks.
+            "is_verified": bool(self.is_verified),
+            "is_admin": bool(self.is_admin),
         }
         # Email/phone are only ever included for the account's own owner (e.g.
         # the /api/me response) — other users don't need to see each other's
@@ -287,6 +317,14 @@ class Message(db.Model):
             ),
             "timestamp": to_iso_utc(self.timestamp),
             "is_read": self.is_read,
+            # Raw per-user reactions rather than pre-aggregated counts, so the
+            # client can compute both "count per emoji" and "did *I* react
+            # with this one" (for highlighting) from a single field, for
+            # whichever of the two participants is viewing it.
+            "reactions": [
+                {"user_id": r.user_id, "emoji": r.emoji}
+                for r in self.reactions.order_by(MessageReaction.created_at.asc())
+            ],
         }
 
     def __repr__(self):
@@ -358,6 +396,35 @@ class StoryReaction(db.Model):
         return f"<StoryReaction story={self.story_id} user={self.user_id}>"
 
 
+class MessageReaction(db.Model):
+    """A single reaction sticker from one user on one chat message, picked
+    from ALLOWED_REACTION_EMOJIS. Each user may have at most one reaction
+    per message: reacting again with the same emoji removes it, reacting
+    with a different one swaps it in place. That keeps the reactions bar
+    under a bubble a short, fixed row instead of growing unbounded as one
+    person taps around — same one-per-user idea as StoryReaction, just not
+    limited to a single emoji since messages support a small sticker set."""
+    __tablename__ = "message_reactions"
+
+    id = db.Column(db.Integer, primary_key=True)
+    message_id = db.Column(db.Integer, db.ForeignKey("messages.id"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    emoji = db.Column(db.String(8), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    message = db.relationship(
+        "Message", backref=db.backref("reactions", lazy="dynamic", cascade="all, delete-orphan")
+    )
+    reactor = db.relationship("User")
+
+    __table_args__ = (
+        db.UniqueConstraint("message_id", "user_id", name="uq_message_reaction_user"),
+    )
+
+    def __repr__(self):
+        return f"<MessageReaction message={self.message_id} user={self.user_id} emoji={self.emoji}>"
+
+
 def _ensure_schema():
     """db.create_all() only creates tables that don't exist yet — it never
     alters an existing table. Anyone upgrading from a previous version of
@@ -410,6 +477,44 @@ def _ensure_schema():
                 "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone_unique "
                 "ON users (phone) WHERE phone IS NOT NULL"
             ))
+
+    if "is_admin" not in existing_columns:
+        logger.info("Migrating users table: adding 'is_admin' column")
+        with db.engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0 NOT NULL"))
+            # The very first account ever created (lowest id) becomes admin +
+            # verified retroactively, same as a fresh registration would get
+            # today — existing deployments shouldn't lose that guarantee just
+            # because this column didn't exist when their admin signed up.
+            conn.execute(text(
+                "UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users)"
+            ))
+
+    if "is_verified" not in existing_columns:
+        logger.info("Migrating users table: adding 'is_verified' column")
+        with db.engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_verified BOOLEAN DEFAULT 0 NOT NULL"))
+            conn.execute(text(
+                "UPDATE users SET is_verified = 1 WHERE id = (SELECT MIN(id) FROM users)"
+            ))
+
+    if "verified_at" not in existing_columns:
+        logger.info("Migrating users table: adding 'verified_at' column")
+        with db.engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN verified_at DATETIME"))
+            conn.execute(text(
+                "UPDATE users SET verified_at = created_at WHERE id = (SELECT MIN(id) FROM users)"
+            ))
+
+    if "activity_streak" not in existing_columns:
+        logger.info("Migrating users table: adding 'activity_streak' column")
+        with db.engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN activity_streak INTEGER DEFAULT 0 NOT NULL"))
+
+    if "last_active_date" not in existing_columns:
+        logger.info("Migrating users table: adding 'last_active_date' column")
+        with db.engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN last_active_date DATE"))
 
     if "messages" in inspector.get_table_names():
         existing_message_columns = {col["name"] for col in inspector.get_columns("messages")}
@@ -589,6 +694,50 @@ def mark_user_disconnected(user_id):
 
 
 # -------------------------------------------------------------------
+# Auto-verification badge
+# -------------------------------------------------------------------
+# A user earns the verification badge by being online at least once on each
+# of VERIFICATION_STREAK_DAYS *consecutive* calendar days. "Online" here
+# means "opened a live Socket.IO connection" (i.e. actually had the app
+# open), so this is called from handle_connect below — never from a plain
+# page load/HTTP request, which wouldn't prove the tab was actually active.
+def record_daily_activity(user):
+    if user.is_verified:
+        return  # already verified (or the admin account) — nothing to track
+
+    today = datetime.utcnow().date()
+
+    if user.last_active_date == today:
+        return  # already counted today; connecting again (another tab,
+        # a reconnect) shouldn't advance the streak twice in one day
+
+    if user.last_active_date == today - timedelta(days=1):
+        # Was active yesterday too — streak continues.
+        user.activity_streak += 1
+    else:
+        # Either the very first time we've seen this user online, or there
+        # was a gap of a day or more since they were last online — either
+        # way the streak (re)starts at 1 today.
+        user.activity_streak = 1
+
+    user.last_active_date = today
+
+    if user.activity_streak >= VERIFICATION_STREAK_DAYS:
+        user.is_verified = True
+        user.verified_at = datetime.utcnow()
+        logger.info(
+            "User %s auto-verified after %d consecutive active days",
+            user.username, user.activity_streak,
+        )
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to record daily activity for user %s", user.id)
+
+
+# -------------------------------------------------------------------
 # Security headers (defense in depth on top of cookie flags above)
 # -------------------------------------------------------------------
 @app.after_request
@@ -639,10 +788,11 @@ def index():
     # (/api/search-users), which starts a fresh conversation on demand.
     conversation_partner_ids = get_conversation_partner_ids(current_user.id)
 
-    # Most recent message time with each partner, so the list can be sorted
-    # like a normal messaging app (latest conversation first) rather than
-    # alphabetically.
+    # Most recent message with each partner, so the list can be sorted like a
+    # normal messaging app (latest conversation first) and can show a preview
+    # snippet of that message before the conversation is opened.
     last_message_at = {}
+    last_message_by_partner = {}
     if conversation_partner_ids:
         history = (
             Message.query.filter(
@@ -657,6 +807,7 @@ def index():
         for m in history:
             other_id = m.recipient_id if m.sender_id == current_user.id else m.sender_id
             last_message_at[other_id] = m.timestamp  # last write wins since we walked ascending
+            last_message_by_partner[other_id] = m
 
     other_users = (
         User.query.filter(User.id.in_(conversation_partner_ids)).all()
@@ -671,6 +822,20 @@ def index():
         .all()
     )
 
+    def preview_for(u):
+        m = last_message_by_partner.get(u.id)
+        if not m:
+            return None
+        return {
+            # "Photo" already comes through in content for image messages
+            # (see Message.content), so the snippet is sensible either way.
+            "text": m.content,
+            "message_type": m.message_type,
+            "from_me": m.sender_id == current_user.id,
+            "is_read": m.is_read,
+            "timestamp": to_iso_utc(m.timestamp),
+        }
+
     users_payload = [
         {
             "id": u.id,
@@ -680,29 +845,49 @@ def index():
             "unread_count": unread_counts.get(u.id, 0),
             "online": is_user_online(u.id),
             "last_seen": (None if is_user_online(u.id) else to_iso_utc(u.last_seen)),
+            "last_message": preview_for(u),
+            "is_verified": bool(u.is_verified),
+            "is_admin": bool(u.is_admin),
         }
         for u in other_users
     ]
 
-    return render_template(
+    return _no_store(render_template(
         "chat.html",
         current_user_data=current_user.to_dict(include_email=True),
         users=users_payload,
-    )
+    ))
+
+
+def _no_store(response):
+    """Stop the browser from serving this page out of its back/forward cache
+    (bfcache) or disk cache. Without this, pressing the phone's hardware
+    back button can show a *stale* snapshot of a previous page (e.g. the
+    register/login screen exactly as it looked before the user logged in)
+    instead of asking the server again — which makes it look like the app
+    logged the user out and dumped them on the registration page, even
+    though the session was never touched. Forcing revalidation means the
+    login_page/register_page routes' `if current_user.is_authenticated`
+    check always re-runs and bounces a logged-in user straight back to
+    the chat, and index() always re-runs @login_required correctly too."""
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.route("/login")
 def login_page():
     if current_user.is_authenticated:
         return redirect(url_for("index"))
-    return render_template("login.html")
+    return _no_store(render_template("login.html"))
 
 
 @app.route("/register")
 def register_page():
     if current_user.is_authenticated:
         return redirect(url_for("index"))
-    return render_template("register.html")
+    return _no_store(render_template("register.html"))
 
 
 # -------------------------------------------------------------------
@@ -770,11 +955,25 @@ def register():
     if phone and User.query.filter(User.phone == phone).first():
         return jsonify({"error": "An account with that phone number already exists."}), 409
 
+    # The very first account ever created on this deployment is auto-verified
+    # and promoted to admin immediately. In the extremely unlikely case of two
+    # registration requests overlapping in the same instant (this app runs a
+    # single worker, so that would take two concurrent requests racing before
+    # either commits), both could observe an empty table and both could end
+    # up admin — an acceptable edge case here given how rare a truly
+    # simultaneous "first ever" signup is, but worth knowing about if this
+    # app is ever scaled to multiple workers/processes.
+    is_first_account_ever = User.query.count() == 0
+
     try:
         # No OTP/verification step — the account is created and usable
         # immediately from the email/phone number as entered.
         user = User(username=username, email=email, phone=phone, full_name=full_name)
         user.set_password(password)
+        if is_first_account_ever:
+            user.is_admin = True
+            user.is_verified = True
+            user.verified_at = datetime.utcnow()
         db.session.add(user)
         db.session.commit()
     except Exception:
@@ -1145,6 +1344,80 @@ def send_photo_message(recipient_id):
     return jsonify({"message": "Photo sent.", "data": payload}), 201
 
 
+@app.route("/api/messages/<int:message_id>/react", methods=["POST"])
+@login_required
+@limiter.limit("300 per hour")
+def react_to_message(message_id):
+    """
+    Expected payload:
+    {
+        "emoji": <one of ALLOWED_REACTION_EMOJIS>
+    }
+
+    Add/swap/remove the current user's reaction sticker on a message.
+    Sending the same emoji the user already reacted with removes it;
+    sending a different one swaps it — one reaction per user per message,
+    the same semantics MessageReaction's unique constraint enforces.
+
+    Only the two people in the conversation (the message's sender or
+    recipient) may react to it — this endpoint isn't a general-purpose
+    "react to anyone's message" API.
+    """
+    data = request.get_json(silent=True) or {}
+    emoji = (data.get("emoji") or "").strip()
+
+    if emoji not in ALLOWED_REACTION_EMOJIS:
+        return jsonify({"error": "Unsupported reaction."}), 400
+
+    message = Message.query.get(message_id)
+    if not message:
+        return jsonify({"error": "Message not found."}), 404
+
+    if current_user.id not in (message.sender_id, message.recipient_id):
+        return jsonify({"error": "You can only react to messages in your own conversations."}), 403
+
+    existing = MessageReaction.query.filter_by(message_id=message_id, user_id=current_user.id).first()
+
+    try:
+        if existing and existing.emoji == emoji:
+            db.session.delete(existing)
+            my_reaction = None
+        elif existing:
+            existing.emoji = emoji
+            my_reaction = emoji
+        else:
+            db.session.add(MessageReaction(message_id=message_id, user_id=current_user.id, emoji=emoji))
+            my_reaction = emoji
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to update message reaction")
+        return jsonify({"error": "Could not update reaction. Please try again."}), 500
+
+    reactions = [
+        {"user_id": r.user_id, "emoji": r.emoji}
+        for r in message.reactions.order_by(MessageReaction.created_at.asc())
+    ]
+
+    other_party_id = (
+        message.recipient_id if current_user.id == message.sender_id else message.sender_id
+    )
+
+    # Broadcast to both participants' rooms (all open tabs/devices on both
+    # ends), same pattern as handle_send_message — the reactor's own other
+    # tabs need to see this too, not just the other party.
+    socketio.emit("message_reacted", {
+        "message_id": message_id,
+        "reactions": reactions,
+    }, room=get_room_name(other_party_id))
+    socketio.emit("message_reacted", {
+        "message_id": message_id,
+        "reactions": reactions,
+    }, room=get_room_name(current_user.id))
+
+    return jsonify({"my_reaction": my_reaction, "reactions": reactions}), 200
+
+
 # -------------------------------------------------------------------
 # Stories API Routes (JSON)
 #
@@ -1412,6 +1685,8 @@ def handle_connect():
 
     join_room(get_room_name(current_user.id))
     emit("connection_ack", {"message": f"Connected as {current_user.username}"})
+
+    record_daily_activity(current_user)
 
     if mark_user_connected(current_user.id):
         # First open connection for this user (not just another tab) — let
