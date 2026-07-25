@@ -1660,6 +1660,47 @@ a:focus-visible {
 .feed-card-delete:hover { background: var(--canvas); color: var(--ink); }
 .feed-card-delete[hidden] { display: none; }
 
+/* Name/avatar in a feed post are the entry point into that person's
+   account page (see #accountModalBackdrop). */
+.feed-card-account-trigger { cursor: pointer; }
+span.feed-card-name.feed-card-account-trigger:hover { text-decoration: underline; }
+
+/* ---- Account page modal (opened from the news feed) ---- */
+.account-modal-body { align-items: center; }
+.account-modal-head {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 20px;
+}
+.account-modal-head .avatar-lg {
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-plate);
+    margin-bottom: 4px;
+}
+.account-modal-name {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+}
+.account-modal-username { font-size: 13.5px; color: var(--ink-soft); }
+.account-modal-stats {
+    display: flex;
+    gap: 18px;
+    margin-top: 8px;
+    font-size: 13.5px;
+    color: var(--ink-soft);
+}
+.account-modal-stats strong { color: var(--ink); font-weight: 800; }
+.account-modal-actions { display: flex; gap: 10px; width: 100%; }
+.account-modal-actions .btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; }
+.account-chat-btn[hidden], .account-follow-btn[hidden] { display: none; }
+
 /* Text sits above the picture — same reading order as the composer,
    and the same order a normal feed post is written in. */
 .feed-card-text {
