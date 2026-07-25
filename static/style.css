@@ -1543,7 +1543,32 @@ a:focus-visible {
    pane (sits beside the sidebar, same as the chat pane does), with a
    normal vertically-scrollable list of post cards, Facebook-style.
    ===================================================================== */
-.feed-nav-btn { margin-right: 2px; }
+.feed-nav-btn { position: relative; margin-right: 2px; }
+
+/* Unread post count on the feed nav icon — same brand color/weight as
+   .unread-badge, just pinned to the button's top-right corner instead of
+   sitting inline in a row, since this badge overlays an icon rather than
+   trailing a name. Caps its label at "10+" (see renderFeedUnreadBadge in
+   chat.html) rather than .unread-badge's "99+", since a single shared
+   feed counter climbing that high isn't meaningfully more urgent. */
+.feed-unread-badge {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    background: var(--brand);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: var(--radius-full);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 1px 3px rgba(255, 106, 26, 0.35), 0 0 0 2px var(--surface);
+}
 
 .feed-backdrop {
     position: fixed;
@@ -1581,8 +1606,7 @@ a:focus-visible {
     z-index: 3;
 }
 .feed-header-title { font-size: 16px; font-weight: 800; letter-spacing: -0.01em; color: var(--ink); }
-.feed-close { color: var(--ink-soft); }
-.feed-close:hover { background: var(--canvas); color: var(--ink); }
+.feed-header-hint { font-size: 12px; font-weight: 600; color: var(--ink-faint); }
 
 /* Vertical, scrollable post list — scrolls up and down natively, no
    snapping, no swipe gestures: just a normal feed you scroll through. */
@@ -1701,7 +1725,7 @@ a:focus-visible {
     align-items: center;
     justify-content: center;
     gap: 4px;
-    padding: 60px 20px;
+    padding: 4px 20px 20px;
     color: var(--ink-soft);
     text-align: center;
 }
@@ -1845,6 +1869,17 @@ a:focus-visible {
 @media (max-width: 760px) {
     .feed-backdrop { left: 0; }
     .feed-card { max-width: 100%; }
+
+    /* Keep the persistent header row (search / news-feed icon / profile
+       button) and the stories bar floating above the feed overlay, so
+       opening the feed doesn't hide them — the feed sits underneath. */
+    .sidebar-header,
+    .sidebar-topbar,
+    .stories-bar {
+        position: relative;
+        z-index: 41;
+        background: var(--surface);
+    }
 }
 
 /* ---------------------------------------------------------------------
