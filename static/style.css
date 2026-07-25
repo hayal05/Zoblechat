@@ -710,6 +710,31 @@ a:focus-visible {
     background: var(--surface);
     border-bottom: 1px solid var(--border);
 }
+/* The avatar + name/status block is a <button> (opens group info for a
+   group conversation) but should look and lay out exactly like the plain
+   <span> it replaced for a 1:1 chat, where it's inert. */
+.chat-header-main {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    flex: 1;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: default;
+    border-radius: var(--radius-md);
+}
+.chat-header-main.is-group {
+    cursor: pointer;
+}
+.chat-header-main.is-group:hover {
+    background: var(--canvas);
+}
 .chat-header-identity {
     display: flex;
     flex-direction: column;
@@ -1612,3 +1637,163 @@ a:focus-visible {
     margin: 0 0 3px 2px;
 }
 .msg-row.outgoing .group-msg-sender { display: none; }
+
+/* ---------------------------------------------------------------------
+   Group info modal — rename, photo, member management, leave group
+   --------------------------------------------------------------------- */
+.modal-card-lg { max-width: 440px; }
+.group-info-body { gap: 4px; }
+
+.group-name-edit-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.group-name-edit-row .field-input { flex: 1; }
+.group-name-edit-row .btn-secondary {
+    padding: 8px 14px;
+    flex-shrink: 0;
+}
+.field-input:disabled {
+    background: var(--canvas);
+    color: var(--ink-soft);
+    cursor: default;
+}
+
+/* Text-only actions — "Remove photo", "+ Add members" — that shouldn't
+   carry the visual weight of a full bordered button. */
+.btn-text-link {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--brand-dark);
+    cursor: pointer;
+}
+.btn-text-link:hover { text-decoration: underline; }
+.btn-text-danger {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-weight: 600;
+    font-size: 13px;
+    color: #DC2626;
+    cursor: pointer;
+}
+.btn-text-danger:hover { text-decoration: underline; }
+.btn-text-danger[hidden], .btn-text-link[hidden] { display: none; }
+
+.btn-danger {
+    background: #FEF2F2;
+    color: #DC2626;
+    border: 1px solid #FECACA;
+    padding: 11px 16px;
+}
+.btn-danger:hover { background: #FEE2E2; }
+.btn-danger:active { transform: scale(0.98); }
+
+.group-info-members-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-top: 18px;
+}
+.group-info-members-header .field-label { margin: 0; }
+
+.add-members-panel {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 10px;
+    margin: 8px 0 14px;
+    background: var(--canvas);
+}
+.add-members-panel .member-picker-list { max-height: 160px; border: none; padding: 0; background: var(--surface); border-radius: var(--radius-sm); }
+.add-members-panel[hidden] { display: none; }
+.add-members-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+}
+.add-members-actions .btn { padding: 8px 16px; }
+#addMembersCount { margin: 6px 0 0; text-align: right; }
+
+.group-members-list {
+    max-height: 260px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 4px;
+}
+.group-member-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 4px;
+}
+.group-member-row .avatar { width: 36px; height: 36px; flex-shrink: 0; }
+.group-member-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.group-member-you { font-weight: 500; color: var(--ink-faint); }
+.group-member-role-badge {
+    flex-shrink: 0;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--brand-dark);
+    background: var(--brand-tint);
+    border: 1px solid var(--brand-tint-strong);
+    border-radius: var(--radius-full);
+    padding: 2px 8px;
+}
+.group-member-menu-btn { flex-shrink: 0; }
+
+.group-member-menu {
+    position: absolute;
+    top: calc(100% - 4px);
+    right: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-plate-lg);
+    padding: 6px;
+    z-index: 30;
+    min-width: 180px;
+    animation: profile-menu-in 0.15s var(--ease);
+}
+.group-member-menu[hidden] { display: none; }
+.group-member-menu-item {
+    width: 100%;
+    display: block;
+    background: transparent;
+    border: none;
+    padding: 9px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    cursor: pointer;
+    text-align: left;
+}
+.group-member-menu-item:hover { background: var(--canvas); }
+.group-member-menu-item-danger { color: #DC2626; }
+.group-member-menu-item-danger:hover { background: #FEF2F2; }
+
+.group-info-footer {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
