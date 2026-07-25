@@ -42,7 +42,7 @@ from flask_login import (
     LoginManager, UserMixin, login_user, logout_user,
     login_required, current_user
 )
-from flask_socketio import SocketIO, join_room, emit
+from flask_socketio import SocketIO, join_room, leave_room, emit
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from sqlalchemy import func
@@ -425,6 +425,108 @@ class MessageReaction(db.Model):
         return f"<MessageReaction message={self.message_id} user={self.user_id} emoji={self.emoji}>"
 
 
+class Group(db.Model):
+    """A group chat. Membership/role lives in GroupMember; this row just
+    holds the group's own identity."""
+    __tablename__ = "groups"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(60), nullable=False)
+    # ON DELETE SET NULL — a group outlives its creator's account being
+    # deleted; who's an admin is tracked in GroupMember, not here.
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    members = db.relationship(
+        "GroupMember", backref="group", lazy="dynamic", cascade="all, delete-orphan"
+    )
+    messages = db.relationship(
+        "GroupMessage", backref="group", lazy="dynamic", cascade="all, delete-orphan"
+    )
+
+    def to_dict(self, viewer_id=None):
+        member_rows = self.members.order_by(GroupMember.joined_at.asc()).all()
+        last_message = self.messages.order_by(GroupMessage.timestamp.desc()).first()
+        return {
+            "id": self.id,
+            "name": self.name,
+            "created_by": self.created_by,
+            "created_at": to_iso_utc(self.created_at),
+            "member_count": len(member_rows),
+            "members": [m.to_dict() for m in member_rows],
+            "my_role": next(
+                (m.role for m in member_rows if m.user_id == viewer_id), None
+            ) if viewer_id is not None else None,
+            "last_message": last_message.to_dict() if last_message else None,
+        }
+
+    def __repr__(self):
+        return f"<Group {self.id} {self.name!r}>"
+
+
+class GroupMember(db.Model):
+    __tablename__ = "group_members"
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey("groups.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = db.Column(db.String(10), nullable=False, default="member")  # 'admin' | 'member'
+    joined_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    user = db.relationship("User")
+
+    __table_args__ = (
+        db.UniqueConstraint("group_id", "user_id", name="uq_group_member_user"),
+    )
+
+    def to_dict(self):
+        return {
+            "user_id": self.user_id,
+            "username": self.user.username if self.user else None,
+            "full_name": self.user.full_name if self.user else None,
+            "profile_pic": self.user.profile_pic if self.user else None,
+            "role": self.role,
+            "joined_at": to_iso_utc(self.joined_at),
+        }
+
+    def __repr__(self):
+        return f"<GroupMember group={self.group_id} user={self.user_id} role={self.role}>"
+
+
+class GroupMessage(db.Model):
+    __tablename__ = "group_messages"
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey("groups.id", ondelete="CASCADE"), nullable=False, index=True)
+    sender_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    content = db.Column(db.String(MESSAGE_MAX_LENGTH), nullable=False)
+    message_type = db.Column(db.String(10), nullable=False, default="text")  # 'text' | 'image'
+    image_path = db.Column(db.String(255), nullable=True)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    sender = db.relationship("User")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "group_id": self.group_id,
+            "sender_id": self.sender_id,
+            "sender_username": self.sender.username if self.sender else None,
+            "sender_full_name": self.sender.full_name if self.sender else None,
+            "sender_profile_pic": self.sender.profile_pic if self.sender else None,
+            "content": self.content,
+            "message_type": self.message_type,
+            "image_url": (
+                url_for("static", filename=f"uploads/chat_photos/{self.image_path}")
+                if self.image_path else None
+            ),
+            "timestamp": to_iso_utc(self.timestamp),
+        }
+
+    def __repr__(self):
+        return f"<GroupMessage {self.id} group={self.group_id} from={self.sender_id}>"
+
+
 def _ensure_schema():
     """db.create_all() only creates tables that don't exist yet — it never
     alters an existing table. Anyone upgrading from a previous version of
@@ -612,6 +714,26 @@ def get_room_name(user_id):
     """Each user gets a private room named after their user ID, so we can
     target them directly regardless of which browser tab/device they're on."""
     return f"user_{user_id}"
+
+
+def get_group_room_name(group_id):
+    """Each group gets its own Socket.IO room, separate from any user's
+    private room, so a group broadcast can never leak into a 1:1 DM room
+    or vice versa."""
+    return f"group_{group_id}"
+
+
+def is_group_member(group_id, user_id):
+    return db.session.query(
+        GroupMember.query.filter_by(group_id=group_id, user_id=user_id).exists()
+    ).scalar()
+
+
+def get_user_group_ids(user_id):
+    return [
+        row[0] for row in
+        db.session.query(GroupMember.group_id).filter(GroupMember.user_id == user_id).all()
+    ]
 
 
 def get_conversation_partner_ids(user_id):
@@ -1420,6 +1542,185 @@ def react_to_message(message_id):
 
 
 # -------------------------------------------------------------------
+# Groups API Routes (JSON)
+#
+# A group's messages live in Socket.IO (handle_send_group_message) the
+# same way 1:1 text messages do — these REST routes cover creating a
+# group, listing the current user's groups, and fetching one group's
+# full detail + history when its conversation is opened. Photo messages
+# go through send_group_photo_message below, mirroring send_photo_message.
+# -------------------------------------------------------------------
+@app.route("/api/groups", methods=["POST"])
+@login_required
+@limiter.limit("20 per hour")
+def create_group():
+    """
+    Expected payload:
+    {
+        "name": <str>,
+        "member_ids": [<int>, ...]   # NOT including the creator
+    }
+    The creator is always added as 'admin', regardless of what's in
+    member_ids — you cannot demote yourself via the request body.
+    """
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    raw_member_ids = data.get("member_ids") or []
+
+    if not name:
+        return jsonify({"error": "Group name is required."}), 400
+    if len(name) > 60:
+        return jsonify({"error": "Group name must be 60 characters or fewer."}), 400
+    if not isinstance(raw_member_ids, list):
+        return jsonify({"error": "member_ids must be an array."}), 400
+    if len(raw_member_ids) > 250:
+        return jsonify({"error": "Cannot add more than 250 members at once."}), 400
+
+    try:
+        member_ids = {int(uid) for uid in raw_member_ids}
+    except (TypeError, ValueError):
+        return jsonify({"error": "member_ids must contain valid user ids."}), 400
+
+    member_ids.discard(current_user.id)  # creator is added separately, as admin
+
+    if member_ids:
+        found_count = User.query.filter(User.id.in_(member_ids)).count()
+        if found_count != len(member_ids):
+            return jsonify({"error": "One or more member_ids do not exist."}), 400
+
+    try:
+        group = Group(name=name, created_by=current_user.id)
+        db.session.add(group)
+        db.session.flush()  # assigns group.id before we insert members
+
+        db.session.add(GroupMember(group_id=group.id, user_id=current_user.id, role="admin"))
+        for uid in member_ids:
+            db.session.add(GroupMember(group_id=group.id, user_id=uid, role="member"))
+
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to create group")
+        return jsonify({"error": "Could not create group. Please try again."}), 500
+
+    payload = group.to_dict(viewer_id=current_user.id)
+
+    # Every member's open tabs should see the new group appear instantly,
+    # same live-update principle as receive_message — join each member's
+    # private room (not the group room; they haven't joined that yet from
+    # the client) and push the new group there.
+    for uid in member_ids | {current_user.id}:
+        socketio.emit("group_created", payload, room=get_room_name(uid))
+
+    return jsonify({"group": payload}), 201
+
+
+@app.route("/api/groups", methods=["GET"])
+@login_required
+def list_groups():
+    """All groups the current user belongs to, most recently active first."""
+    my_group_ids = get_user_group_ids(current_user.id)
+    groups = Group.query.filter(Group.id.in_(my_group_ids)).all() if my_group_ids else []
+
+    def sort_key(g):
+        last = g.messages.order_by(GroupMessage.timestamp.desc()).first()
+        return last.timestamp if last else g.created_at
+
+    groups.sort(key=sort_key, reverse=True)
+
+    return jsonify({
+        "groups": [g.to_dict(viewer_id=current_user.id) for g in groups]
+    }), 200
+
+
+@app.route("/api/groups/<int:group_id>", methods=["GET"])
+@login_required
+def get_group(group_id):
+    """Full group detail plus message history — used when a conversation
+    is opened. Only members may view a group; everyone else gets a 403
+    rather than a 404, since group IDs aren't secret, only their contents."""
+    group = Group.query.get(group_id)
+    if not group:
+        return jsonify({"error": "Group not found."}), 404
+
+    if not is_group_member(group_id, current_user.id):
+        return jsonify({"error": "You are not a member of this group."}), 403
+
+    messages = (
+        GroupMessage.query.filter_by(group_id=group_id)
+        .order_by(GroupMessage.timestamp.asc())
+        .all()
+    )
+
+    payload = group.to_dict(viewer_id=current_user.id)
+    payload["messages"] = [m.to_dict() for m in messages]
+    return jsonify({"group": payload}), 200
+
+
+@app.route("/api/groups/<int:group_id>/messages/photo", methods=["POST"])
+@login_required
+@limiter.limit("30 per hour")
+def send_group_photo_message(group_id):
+    """Uploads an image and sends it to a group, mirroring send_photo_message
+    for 1:1 chat — persists a GroupMessage row and broadcasts it over
+    Socket.IO to the group's room so every member's open tab updates live."""
+    if not is_group_member(group_id, current_user.id):
+        return jsonify({"error": "You are not a member of this group."}), 403
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file part in the request."}), 400
+
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "No file selected."}), 400
+
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Unsupported file type. Use PNG, JPG, GIF, or WEBP."}), 400
+
+    original_name = secure_filename(file.filename)
+    ext = original_name.rsplit(".", 1)[1].lower()
+    unique_name = f"{current_user.id}_{uuid.uuid4().hex}.{ext}"
+    filepath = os.path.join(CHAT_PHOTOS_FOLDER, unique_name)
+
+    try:
+        file.save(filepath)
+    except OSError:
+        logger.exception("Failed to save uploaded group chat photo")
+        return jsonify({"error": "Could not save the uploaded file."}), 500
+
+    if not verify_is_real_image(filepath):
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        return jsonify({"error": "The uploaded file is not a valid image."}), 400
+
+    try:
+        message = GroupMessage(
+            group_id=group_id,
+            sender_id=current_user.id,
+            content="Photo",
+            message_type="image",
+            image_path=unique_name,
+        )
+        db.session.add(message)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        logger.exception("Failed to save group photo message")
+        return jsonify({"error": "Could not send photo. Please try again."}), 500
+
+    payload = message.to_dict()
+    socketio.emit("new_group_message", payload, room=get_group_room_name(group_id))
+
+    return jsonify({"message": "Photo sent.", "data": payload}), 201
+
+
+# -------------------------------------------------------------------
 # Stories API Routes (JSON)
 #
 # Photo-only posts (no video) that expire automatically after
@@ -1685,6 +1986,14 @@ def handle_connect():
         raise ConnectionRefusedError("not_authenticated")
 
     join_room(get_room_name(current_user.id))
+
+    # Auto-join every group this user belongs to, same as their private
+    # room — so new_group_message / group_created events reach every open
+    # tab immediately without the client having to emit join_group for
+    # each group it already knows about.
+    for group_id in get_user_group_ids(current_user.id):
+        join_room(get_group_room_name(group_id))
+
     emit("connection_ack", {"message": f"Connected as {current_user.username}"})
 
     record_daily_activity(current_user)
@@ -1708,6 +2017,114 @@ def handle_join(data=None):
 
     join_room(get_room_name(current_user.id))
     emit("connection_ack", {"message": f"{current_user.username} joined their room"})
+
+
+@socketio.on("join_group")
+def handle_join_group(data=None):
+    """
+    Expected payload: {"group_id": <int>}
+    Explicit per-group join, for reconnect scenarios or a group the user
+    was just added to mid-session (auto-join on connect only covers
+    groups they were already in at connection time).
+    """
+    if not current_user.is_authenticated:
+        emit("error", {"error": "Not authenticated."})
+        return
+
+    if not isinstance(data, dict):
+        emit("error", {"error": "Invalid payload."})
+        return
+
+    try:
+        group_id = int(data.get("group_id"))
+    except (TypeError, ValueError):
+        emit("error", {"error": "group_id must be a valid group id."})
+        return
+
+    if not is_group_member(group_id, current_user.id):
+        emit("error", {"error": "You are not a member of this group."})
+        return
+
+    join_room(get_group_room_name(group_id))
+    emit("group_join_ack", {"group_id": group_id})
+
+
+@socketio.on("leave_group")
+def handle_leave_group(data=None):
+    """Expected payload: {"group_id": <int>} — leaves the Socket.IO room
+    only (e.g. navigating away from the conversation view); does not
+    remove the user's GroupMember row."""
+    if not current_user.is_authenticated or not isinstance(data, dict):
+        return
+
+    try:
+        group_id = int(data.get("group_id"))
+    except (TypeError, ValueError):
+        return
+
+    leave_room(get_group_room_name(group_id))
+
+
+@socketio.on("send_group_message")
+def handle_send_group_message(data):
+    """
+    Expected payload:
+    {
+        "group_id": <int>,
+        "content": <str>
+    }
+    Same shape/flow as handle_send_message, but broadcasts to the
+    group's shared room instead of two individual private rooms.
+    """
+    if not current_user.is_authenticated:
+        emit("error", {"error": "Not authenticated."})
+        return
+
+    if not isinstance(data, dict):
+        emit("error", {"error": "Invalid payload."})
+        return
+
+    try:
+        group_id = int(data.get("group_id"))
+    except (TypeError, ValueError):
+        emit("error", {"error": "group_id must be a valid group id."})
+        return
+
+    content = (data.get("content") or "").strip()
+    if not content:
+        emit("error", {"error": "Message content cannot be empty."})
+        return
+    if len(content) > MESSAGE_MAX_LENGTH:
+        emit("error", {"error": f"Message is too long (max {MESSAGE_MAX_LENGTH} characters)."})
+        return
+
+    # Re-check membership on every send, not just at join_group time — the
+    # socket could still be sitting in the room after being removed from
+    # the group, and room membership alone isn't authorization to post.
+    if not is_group_member(group_id, current_user.id):
+        emit("error", {"error": "You are not a member of this group."})
+        return
+
+    try:
+        message = GroupMessage(
+            group_id=group_id,
+            sender_id=current_user.id,
+            content=content,
+        )
+        db.session.add(message)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to save group message")
+        emit("error", {"error": "Could not send message. Please try again."})
+        return
+
+    payload = message.to_dict()
+
+    # Broadcast to the whole room, sender included, so every open tab —
+    # sender's other devices too — renders off this one server-confirmed
+    # event instead of the sender optimistically rendering its own message.
+    socketio.emit("new_group_message", payload, room=get_group_room_name(group_id))
 
 
 @socketio.on("send_message")
