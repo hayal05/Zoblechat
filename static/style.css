@@ -856,7 +856,7 @@ a:focus-visible {
 .msg-row.incoming { justify-content: flex-start; }
 
 .msg-bubble {
-    max-width: 62%;
+    max-width: min(62%, 420px);
     min-width: 0;
     padding: 10px 14px;
     border-radius: var(--radius-md);
@@ -1175,7 +1175,7 @@ a:focus-visible {
     .back-btn { display: flex; }
     .app-shell.conversation-open .sidebar { display: none; }
     .app-shell.conversation-open .chat-pane { display: flex; width: 100%; }
-    .msg-bubble { max-width: 80%; }
+    .msg-bubble { max-width: min(80%, 300px); }
 }
 
 /* ---------------------------------------------------------------------
@@ -1199,7 +1199,7 @@ a:focus-visible {
     background: transparent;
     border: none;
     box-shadow: none;
-    max-width: 62%;
+    max-width: min(62%, 340px);
 }
 .msg-photo {
     display: block;
@@ -1246,7 +1246,7 @@ a:focus-visible {
 .lightbox-close:hover { background: rgba(255, 255, 255, 0.22); color: #fff; }
 
 @media (max-width: 760px) {
-    .msg-bubble-photo { max-width: 80%; }
+    .msg-bubble-photo { max-width: min(80%, 260px); }
 }
 
 /* ---------------------------------------------------------------------
