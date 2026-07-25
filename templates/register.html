@@ -8,92 +8,131 @@
             <span class="brand-dot"></span>
             <span class="brand-word">Zoble Chat</span>
         </div>
-        <h1 class="auth-heading">Create your account</h1>
-        <p class="auth-subheading">Pick a username, set a password, start chatting.</p>
 
-        <form id="registerForm" class="auth-form" novalidate>
-            <label class="field-label" for="fullName">Name</label>
-            <input class="field-input" type="text" id="fullName" name="full_name" autocomplete="name" maxlength="60" required>
+        <!-- ============ STEP 1: name / email / password ============ -->
+        <div id="signupStep">
+            <h1 class="auth-heading">Create your account</h1>
+            <p class="auth-subheading">We'll email you a code to confirm it's really you.</p>
 
-            <div class="contact-toggle" role="tablist" aria-label="Sign up with">
-                <button type="button" class="contact-toggle-btn is-active" id="contactTabEmail" role="tab" aria-selected="true">Email</button>
-                <button type="button" class="contact-toggle-btn" id="contactTabPhone" role="tab" aria-selected="false">Phone number</button>
-            </div>
+            <form id="registerForm" class="auth-form" novalidate>
+                <label class="field-label" for="fullName">Name</label>
+                <input class="field-input" type="text" id="fullName" name="full_name" autocomplete="name" maxlength="60" required>
 
-            <div id="emailField">
                 <label class="field-label" for="email">Email</label>
-                <input class="field-input" type="email" id="email" name="email" autocomplete="email">
-            </div>
+                <input class="field-input" type="email" id="email" name="email" autocomplete="email" required>
 
-            <div id="phoneField" hidden>
-                <label class="field-label" for="phone">Phone number</label>
-                <input class="field-input" type="tel" id="phone" name="phone" autocomplete="tel" placeholder="+15551234567">
-            </div>
+                <label class="field-label" for="password">Password</label>
+                <input class="field-input" type="password" id="password" name="password" autocomplete="new-password" minlength="8" required>
+                <p class="field-hint">At least 8 characters, with a letter and a number.</p>
 
-            <label class="field-label" for="username">Username</label>
-            <input class="field-input" type="text" id="username" name="username" autocomplete="username" required>
+                <p class="field-error" id="registerError" hidden></p>
 
-            <label class="field-label" for="password">Password</label>
-            <input class="field-input" type="password" id="password" name="password" autocomplete="new-password" minlength="8" required>
-            <p class="field-hint">At least 8 characters, with a letter and a number.</p>
+                <button class="btn btn-primary btn-block" type="submit">Send verification code</button>
+            </form>
 
-            <p class="field-error" id="registerError" hidden></p>
+            <p class="auth-switch">Already have an account? <a href="{{ url_for('login_page') }}">Log in</a></p>
+        </div>
 
-            <button class="btn btn-primary btn-block" type="submit">Create account</button>
-        </form>
+        <!-- ============ STEP 2: enter the emailed code ============ -->
+        <div id="otpStep" hidden>
+            <h1 class="auth-heading">Check your email</h1>
+            <p class="auth-subheading">Enter the 6-digit code we sent to <strong id="otpEmailLabel"></strong>.</p>
 
-        <p class="auth-switch">Already have an account? <a href="{{ url_for('login_page') }}">Log in</a></p>
+            <form id="otpForm" class="auth-form" novalidate>
+                <label class="field-label" for="otpCode">Verification code</label>
+                <input class="field-input otp-input" type="text" id="otpCode" name="code"
+                       inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code"
+                       maxlength="6" placeholder="000000" required>
+
+                <p class="field-error" id="otpError" hidden></p>
+                <p class="field-success" id="otpSuccess" hidden></p>
+
+                <button class="btn btn-primary btn-block" type="submit">Verify and continue</button>
+            </form>
+
+            <p class="auth-switch">
+                <button type="button" class="link-btn" id="resendCodeBtn">Resend code</button>
+                &nbsp;·&nbsp;
+                <button type="button" class="link-btn" id="changeEmailBtn">Use a different email</button>
+            </p>
+        </div>
     </div>
 </div>
 
 <script>
-    const contactTabEmail = document.getElementById("contactTabEmail");
-    const contactTabPhone = document.getElementById("contactTabPhone");
-    const emailField = document.getElementById("emailField");
-    const phoneField = document.getElementById("phoneField");
-    const emailInput = document.getElementById("email");
-    const phoneInput = document.getElementById("phone");
+    const signupStep = document.getElementById("signupStep");
+    const otpStep = document.getElementById("otpStep");
+    const registerForm = document.getElementById("registerForm");
+    const registerError = document.getElementById("registerError");
+    const otpForm = document.getElementById("otpForm");
+    const otpError = document.getElementById("otpError");
+    const otpSuccess = document.getElementById("otpSuccess");
+    const otpCodeInput = document.getElementById("otpCode");
+    const otpEmailLabel = document.getElementById("otpEmailLabel");
+    const resendCodeBtn = document.getElementById("resendCodeBtn");
+    const changeEmailBtn = document.getElementById("changeEmailBtn");
 
-    let contactMethod = "email";
+    let pendingEmail = null;
+    let resendCooldownTimer = null;
 
-    function setContactMethod(method) {
-        contactMethod = method;
-        const isEmail = method === "email";
-
-        emailField.hidden = !isEmail;
-        phoneField.hidden = isEmail;
-        emailInput.required = isEmail;
-        phoneInput.required = !isEmail;
-
-        contactTabEmail.classList.toggle("is-active", isEmail);
-        contactTabEmail.setAttribute("aria-selected", String(isEmail));
-        contactTabPhone.classList.toggle("is-active", !isEmail);
-        contactTabPhone.setAttribute("aria-selected", String(!isEmail));
+    function setButtonLoading(btn, loading) {
+        btn.disabled = loading;
+        btn.classList.toggle("is-loading", loading);
     }
 
-    contactTabEmail.addEventListener("click", () => setContactMethod("email"));
-    contactTabPhone.addEventListener("click", () => setContactMethod("phone"));
+    function showOtpStep(email) {
+        pendingEmail = email;
+        otpEmailLabel.textContent = email;
+        otpError.hidden = true;
+        otpSuccess.hidden = true;
+        otpCodeInput.value = "";
+        signupStep.hidden = true;
+        otpStep.hidden = false;
+        otpCodeInput.focus();
+        startResendCooldown();
+    }
 
-    document.getElementById("registerForm").addEventListener("submit", async (e) => {
+    function showSignupStep() {
+        pendingEmail = null;
+        clearInterval(resendCooldownTimer);
+        otpStep.hidden = true;
+        signupStep.hidden = false;
+    }
+
+    function startResendCooldown(seconds) {
+        let remaining = seconds || 45;
+        resendCodeBtn.disabled = true;
+        clearInterval(resendCooldownTimer);
+        const render = () => {
+            resendCodeBtn.textContent = remaining > 0 ? `Resend code (${remaining}s)` : "Resend code";
+        };
+        render();
+        resendCooldownTimer = setInterval(() => {
+            remaining -= 1;
+            render();
+            if (remaining <= 0) {
+                clearInterval(resendCooldownTimer);
+                resendCodeBtn.disabled = false;
+            }
+        }, 1000);
+    }
+
+    // ---- Step 1: send code ----
+    registerForm.addEventListener("submit", async (e) => {
         e.preventDefault();
-        const errorEl = document.getElementById("registerError");
-        errorEl.hidden = true;
+        registerError.hidden = true;
 
         const payload = {
             full_name: document.getElementById("fullName").value.trim(),
-            username: document.getElementById("username").value.trim(),
+            email: document.getElementById("email").value.trim(),
             password: document.getElementById("password").value,
-            contact_method: contactMethod,
-            email: contactMethod === "email" ? emailInput.value.trim() : "",
-            phone: contactMethod === "phone" ? phoneInput.value.trim() : "",
         };
 
-        const submitBtn = document.querySelector("#registerForm button[type=submit]");
-        submitBtn.disabled = true;
-        submitBtn.classList.add("is-loading");
+        const submitBtn = registerForm.querySelector("button[type=submit]");
+        setButtonLoading(submitBtn, true);
 
         try {
-            const res = await fetch("/api/register", {
+            const res = await fetch("/api/register/start", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
@@ -101,8 +140,41 @@
             const data = await res.json();
 
             if (!res.ok) {
-                errorEl.textContent = data.error || "Something went wrong.";
-                errorEl.hidden = false;
+                registerError.textContent = data.error || "Something went wrong.";
+                registerError.hidden = false;
+                setButtonLoading(submitBtn, false);
+                return;
+            }
+
+            setButtonLoading(submitBtn, false);
+            showOtpStep(payload.email);
+        } catch (err) {
+            registerError.textContent = "Network error. Please try again.";
+            registerError.hidden = false;
+            setButtonLoading(submitBtn, false);
+        }
+    });
+
+    // ---- Step 2: verify code ----
+    otpForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        otpError.hidden = true;
+
+        const submitBtn = otpForm.querySelector("button[type=submit]");
+        setButtonLoading(submitBtn, true);
+
+        try {
+            const res = await fetch("/api/register/verify", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email: pendingEmail, code: otpCodeInput.value.trim() }),
+            });
+            const data = await res.json();
+
+            if (!res.ok) {
+                otpError.textContent = data.error || "Something went wrong.";
+                otpError.hidden = false;
+                setButtonLoading(submitBtn, false);
                 return;
             }
 
@@ -110,14 +182,43 @@
             // navigate away, so there's no "done" moment to reset it at.
             window.location.href = "/";
         } catch (err) {
-            errorEl.textContent = "Network error. Please try again.";
-            errorEl.hidden = false;
-        } finally {
-            if (!errorEl.hidden) {
-                submitBtn.disabled = false;
-                submitBtn.classList.remove("is-loading");
-            }
+            otpError.textContent = "Network error. Please try again.";
+            otpError.hidden = false;
+            setButtonLoading(submitBtn, false);
         }
     });
+
+    resendCodeBtn.addEventListener("click", async () => {
+        if (resendCodeBtn.disabled || !pendingEmail) return;
+        otpError.hidden = true;
+        otpSuccess.hidden = true;
+        resendCodeBtn.disabled = true;
+
+        try {
+            const res = await fetch("/api/register/resend", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email: pendingEmail }),
+            });
+            const data = await res.json();
+
+            if (!res.ok) {
+                otpError.textContent = data.error || "Something went wrong.";
+                otpError.hidden = false;
+                resendCodeBtn.disabled = false;
+                return;
+            }
+
+            otpSuccess.textContent = "A new code is on its way.";
+            otpSuccess.hidden = false;
+            startResendCooldown();
+        } catch (err) {
+            otpError.textContent = "Network error. Please try again.";
+            otpError.hidden = false;
+            resendCodeBtn.disabled = false;
+        }
+    });
+
+    changeEmailBtn.addEventListener("click", showSignupStep);
 </script>
 {% endblock %}
