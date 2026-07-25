@@ -548,6 +548,35 @@ class PostComment(db.Model):
         return f"<PostComment {self.id} on post={self.post_id}>"
 
 
+class Follow(db.Model):
+    """One row per (follower -> followed) relationship. Powers the Follow
+    button on the account page opened from a feed post's name/avatar —
+    purely social bookkeeping, doesn't gate messaging or feed visibility
+    (anyone can already chat with or see posts from anyone else)."""
+    __tablename__ = "follows"
+
+    id = db.Column(db.Integer, primary_key=True)
+    follower_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    followed_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    follower = db.relationship(
+        "User", foreign_keys=[follower_id],
+        backref=db.backref("following", lazy="dynamic", cascade="all, delete-orphan"),
+    )
+    followed = db.relationship(
+        "User", foreign_keys=[followed_id],
+        backref=db.backref("followers", lazy="dynamic", cascade="all, delete-orphan"),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint("follower_id", "followed_id", name="uq_follow_pair"),
+    )
+
+    def __repr__(self):
+        return f"<Follow {self.follower_id} -> {self.followed_id}>"
+
+
 class Group(db.Model):
     """A group chat. Membership/role lives in GroupMember; this row just
     holds the group's own identity."""
@@ -1337,6 +1366,22 @@ def update_profile():
         logger.exception("Failed to update profile")
         return jsonify({"error": "Could not update profile. Please try again."}), 500
 
+    # Broadcast to every connected client (not just the current user's own
+    # tabs) so this account's display name updates everywhere it appears —
+    # the chat sidebar, conversation headers, group member lists, story
+    # rings, and any already-loaded feed posts/comments — without those
+    # other clients needing to refresh. Chat and the news feed both read
+    # identity straight off the User row (see Post.to_dict()), so this is
+    # what keeps them showing the same name for the same account instead of
+    # a stale one lingering wherever it was cached client-side.
+    socketio.emit("profile_updated", {
+        "user_id": current_user.id,
+        "full_name": current_user.full_name,
+        "profile_pic": current_user.profile_pic,
+        "is_verified": bool(current_user.is_verified),
+        "is_admin": bool(current_user.is_admin),
+    })
+
     return jsonify({
         "message": "Profile updated.",
         "user": current_user.to_dict(include_email=True),
@@ -1489,6 +1534,67 @@ def get_user(user_id):
     return jsonify({"user": user.to_dict(include_presence=True)}), 200
 
 
+@app.route("/api/users/<int:user_id>/profile", methods=["GET"])
+@login_required
+def get_user_account_page(user_id):
+    """Fetches the data behind the account page opened by tapping a name or
+    avatar in the news feed — the base user fields plus follower/following
+    counts and whether the current viewer already follows them."""
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "User not found."}), 404
+
+    data = user.to_dict()
+    data["follower_count"] = user.followers.count()
+    data["following_count"] = user.following.count()
+    data["is_own"] = user.id == current_user.id
+    data["is_following"] = (
+        not data["is_own"]
+        and Follow.query.filter_by(follower_id=current_user.id, followed_id=user.id).first() is not None
+    )
+    return jsonify({"user": data}), 200
+
+
+@app.route("/api/users/<int:user_id>/follow", methods=["POST"])
+@login_required
+@limiter.limit("100 per hour")
+def toggle_follow(user_id):
+    """Toggles the current user following user_id — send it again to
+    unfollow, same toggle pattern as like_post / react_to_story."""
+    if user_id == current_user.id:
+        return jsonify({"error": "You can't follow yourself."}), 400
+
+    target = User.query.get(user_id)
+    if not target:
+        return jsonify({"error": "User not found."}), 404
+
+    existing = Follow.query.filter_by(follower_id=current_user.id, followed_id=user_id).first()
+
+    try:
+        if existing:
+            db.session.delete(existing)
+            following = False
+        else:
+            db.session.add(Follow(follower_id=current_user.id, followed_id=user_id))
+            following = True
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to toggle follow")
+        return jsonify({"error": "Could not update follow status. Please try again."}), 500
+
+    follower_count = target.followers.count()
+
+    socketio.emit("follow_updated", {
+        "follower_id": current_user.id,
+        "followed_id": user_id,
+        "following": following,
+        "follower_count": follower_count,
+    })
+
+    return jsonify({"following": following, "follower_count": follower_count}), 200
+
+
 @app.route("/api/profile-picture", methods=["POST"])
 @login_required
 @limiter.limit("20 per hour")
@@ -1548,6 +1654,18 @@ def update_profile_picture():
                 os.remove(old_path)
             except OSError:
                 logger.warning("Could not remove old profile picture: %s", old_pic)
+
+    # Same reasoning as the full_name broadcast in update_profile() above —
+    # one account, one photo, shown consistently everywhere it's referenced
+    # (chat sidebar, headers, group members, stories, feed posts/comments)
+    # without waiting on a page reload.
+    socketio.emit("profile_updated", {
+        "user_id": current_user.id,
+        "full_name": current_user.full_name,
+        "profile_pic": current_user.profile_pic,
+        "is_verified": bool(current_user.is_verified),
+        "is_admin": bool(current_user.is_admin),
+    })
 
     return jsonify({"message": "Profile picture updated.", "profile_pic": unique_name}), 200
 
