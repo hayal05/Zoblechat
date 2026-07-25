@@ -1867,7 +1867,15 @@ a:focus-visible {
 .feed-compose-photo-btn { display: inline-flex; align-items: center; gap: 7px; }
 
 @media (max-width: 760px) {
-    .feed-backdrop { left: 0; }
+    .feed-backdrop {
+        left: 0;
+        /* Pushed down by JS (syncFeedMobileOffset in chat.html) to sit
+           just below the header/topbar/stories strip that floats above
+           it — see the z-index: 41 rule below. Without this the feed's
+           own header and topmost card render underneath those bars
+           instead of below them. Falls back to 0 before JS has run. */
+        top: var(--feed-mobile-offset, 0px);
+    }
     .feed-card { max-width: 100%; }
 
     /* Keep the persistent header row (search / news-feed icon / profile
