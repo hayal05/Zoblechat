@@ -553,6 +553,20 @@ a:focus-visible {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+
+/* Sent/read tick shown inline at the start of the sidebar preview for
+   messages the current user sent, so read status is visible at a glance
+   without opening the conversation (mirrors .msg-status inside the thread
+   itself). Unread = single grey check, read = double brand-colored check. */
+.row-status {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: -1px;
+    margin-right: 3px;
+    color: var(--ink-faint);
+}
+.row-status.read { color: var(--brand); }
+.row-status .msg-status-tick + .msg-status-tick { margin-left: -8px; }
 .unread-badge {
     background: var(--brand);
     color: #fff;
@@ -778,6 +792,7 @@ a:focus-visible {
 .messages-scroll {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 24px;
 }
 
@@ -842,11 +857,16 @@ a:focus-visible {
 
 .msg-bubble {
     max-width: 62%;
+    min-width: 0;
     padding: 10px 14px;
     border-radius: var(--radius-md);
     font-size: 14.5px;
     line-height: 1.5;
+    overflow-wrap: anywhere;
     word-wrap: break-word;
+    overflow: hidden; /* establishes a block formatting context so the
+                          floated .msg-meta timestamp below is contained,
+                          keeping bubble height tied to its own content */
     box-shadow: var(--shadow-plate);
 }
 
@@ -874,10 +894,11 @@ a:focus-visible {
 }
 
 .msg-meta {
-    display: flex;
+    float: right;
+    display: inline-flex;
     align-items: center;
-    justify-content: flex-end;
     gap: 3px;
+    margin-left: 8px;
     margin-top: 4px;
 }
 .msg-time {
@@ -913,6 +934,7 @@ a:focus-visible {
     display: flex;
     flex-direction: column;
     max-width: 100%;
+    min-width: 0;
 }
 .msg-row.outgoing .msg-stack { align-items: flex-end; }
 .msg-row.incoming .msg-stack { align-items: flex-start; }
@@ -921,6 +943,7 @@ a:focus-visible {
     display: flex;
     align-items: flex-end;
     gap: 6px;
+    min-width: 0;
 }
 .msg-row.outgoing .msg-bubble-group { flex-direction: row-reverse; }
 
