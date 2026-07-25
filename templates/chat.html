@@ -96,6 +96,15 @@
                 </svg>
                 <span>Chats</span>
             </button>
+            <button class="view-tab" id="groupsTabBtn" type="button" data-view="groups">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="9" cy="7" r="4"></circle>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                </svg>
+                <span>Group</span>
+            </button>
             <button class="view-tab" id="onlineTabBtn" type="button" data-view="online">
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="8" r="4"></circle>
@@ -144,11 +153,25 @@
             <!-- Populated by JS: everyone currently online -->
         </div>
 
+        <div class="chat-list groups-list" id="groupsList" hidden>
+            <!-- Populated by JS: your groups, newest activity first -->
+        </div>
+
         <!-- Floating "+" button — find contacts on Zoble — bottom right -->
         <button class="fab-add-contact" id="findContactsBtn" type="button" title="Find contacts on Zoble">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="12" y1="5" x2="12" y2="19"></line>
                 <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+        </button>
+
+        <!-- Floating "+" button — start a new group — shown only on the Group tab -->
+        <button class="fab-add-contact fab-new-group" id="newGroupBtn" type="button" title="Create a new group" hidden>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M16 19v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                <circle cx="8.5" cy="7" r="3.5"></circle>
+                <line x1="19" y1="8" x2="19" y2="14"></line>
+                <line x1="16" y1="11" x2="22" y2="11"></line>
             </svg>
         </button>
     </aside>
@@ -218,6 +241,43 @@
         </div>
     </div>
 
+    <!-- ============ CREATE GROUP MODAL ============ -->
+    <div class="modal-backdrop" id="groupModalBackdrop" hidden>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="groupModalTitle">
+            <div class="modal-header">
+                <h2 id="groupModalTitle">New group</h2>
+                <button class="btn-icon" id="closeGroupModalBtn" title="Close" type="button">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="modal-body">
+                <label class="field-label" for="groupNameInput">Group name</label>
+                <input class="field-input" type="text" id="groupNameInput" maxlength="60" placeholder="e.g. Weekend Trip" autocomplete="off">
+
+                <label class="field-label group-members-label">Add members</label>
+                <div class="search-box group-member-search">
+                    <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                    <input type="text" id="groupMemberSearchInput" class="search-input" placeholder="Search people…" autocomplete="off">
+                </div>
+
+                <div class="member-picker-list" id="memberPickerList">
+                    <!-- Populated by JS from known contacts -->
+                </div>
+                <p class="field-hint" id="memberPickerCount">0 selected</p>
+
+                <p class="field-error" id="groupError" hidden></p>
+                <button class="btn btn-primary btn-block" id="createGroupBtn" type="button">Create group</button>
+            </div>
+        </div>
+    </div>
+
     <!-- ============ MAIN CHAT PANE ============ -->
     <main class="chat-pane">
         <div class="chat-pane-empty" id="chatEmptyState">
@@ -241,10 +301,18 @@
                     <img id="activeAvatar" src="" alt="">
                     <span class="presence-dot"></span>
                 </span>
+                <span class="avatar avatar-group" id="activeGroupAvatarWrap" hidden>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="9" cy="7" r="4"></circle>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                </span>
                 <span class="chat-header-identity">
                     <span class="chat-header-top">
                         <span class="chat-header-name" id="activeUsername"></span>
-                        <span class="chat-header-badge" title="Only you and this person can see these messages">Private Chat</span>
+                        <span class="chat-header-badge" id="activeHeaderBadge" title="Only you and this person can see these messages">Private Chat</span>
                     </span>
                     <span class="chat-header-status" id="activeStatus">—</span>
                 </span>
@@ -1204,10 +1272,23 @@
         if (view === "online") {
             chatList.hidden = true;
             onlineList.hidden = false;
+            groupsList.hidden = true;
+            findContactsBtn.hidden = false;
+            newGroupBtn.hidden = true;
             renderOnlineList();
+        } else if (view === "groups") {
+            chatList.hidden = true;
+            onlineList.hidden = true;
+            groupsList.hidden = false;
+            findContactsBtn.hidden = true;
+            newGroupBtn.hidden = false;
+            renderGroupsList();
         } else {
             onlineList.hidden = true;
+            groupsList.hidden = true;
             chatList.hidden = false;
+            findContactsBtn.hidden = false;
+            newGroupBtn.hidden = true;
         }
     }
 
@@ -1224,6 +1305,446 @@
     });
 
     renderOnlineList(); // seed the count badge on load
+
+    // ---------------------------------------------------------------
+    // Groups — live group messaging (text + photo), backed by
+    // GET/POST /api/groups + GET /api/groups/<id> for state, and the
+    // send_group_message / new_group_message Socket.IO event pair for
+    // live delivery — the same shape as the 1:1 send_message /
+    // receive_message pair above.
+    // ---------------------------------------------------------------
+    const groupsList = document.getElementById("groupsList");
+    const newGroupBtn = document.getElementById("newGroupBtn");
+    const groupModalBackdrop = document.getElementById("groupModalBackdrop");
+    const closeGroupModalBtn = document.getElementById("closeGroupModalBtn");
+    const groupNameInput = document.getElementById("groupNameInput");
+    const groupMemberSearchInput = document.getElementById("groupMemberSearchInput");
+    const memberPickerList = document.getElementById("memberPickerList");
+    const memberPickerCount = document.getElementById("memberPickerCount");
+    const groupError = document.getElementById("groupError");
+    const createGroupBtn = document.getElementById("createGroupBtn");
+    const activeAvatarWrapEl = document.getElementById("activeAvatarWrap");
+    const activeGroupAvatarWrapEl = document.getElementById("activeGroupAvatarWrap");
+    const activeHeaderBadgeEl = document.getElementById("activeHeaderBadge");
+
+    let activeConversationType = "user"; // "user" | "group" — read by sendCurrentMessage/photoInput
+    let activeGroupId = null;
+
+    // Each entry mirrors Group.to_dict() from the server, plus a local-only
+    // `messages` field: null until the conversation has been opened at
+    // least once (GET /api/groups/<id> populates it), then a live array
+    // kept in sync by the new_group_message socket handler below.
+    let groups = [];
+
+    function getGroup(groupId) {
+        const gid = Number(groupId);
+        return groups.find((g) => g.id === gid) || null;
+    }
+
+    async function loadGroupsFromServer() {
+        try {
+            const res = await fetch("/api/groups");
+            if (!res.ok) return;
+            const data = await res.json();
+            groups = (data.groups || []).map((g) => ({ ...g, messages: null }));
+            renderGroupsList();
+        } catch (err) { /* sidebar just stays empty; retried on next page load */ }
+    }
+
+    loadGroupsFromServer(); // populate the Group tab's sidebar on load
+
+    function groupAvatarHtml() {
+        return `<span class="avatar avatar-group">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                <circle cx="9" cy="7" r="4"></circle>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+            </svg>
+        </span>`;
+    }
+
+    function groupPreviewText(group) {
+        const last = group.last_message;
+        if (!last) return `${group.member_count} member${group.member_count === 1 ? "" : "s"}`;
+        const senderName = last.sender_id === CURRENT_USER_ID
+            ? "You"
+            : (last.sender_full_name || "Someone").split(" ")[0];
+        return `${senderName}: ${last.message_type === "image" ? "📷 Photo" : last.content}`;
+    }
+
+    function buildGroupRow(group) {
+        const row = document.createElement("button");
+        row.className = "chat-row group-row" + (group.id === activeGroupId ? " active" : "");
+        row.dataset.groupId = group.id;
+        const unread = group.unread_count || 0;
+        row.innerHTML = `
+            ${groupAvatarHtml()}
+            <span class="chat-row-body">
+                <span class="chat-row-top">
+                    <span class="chat-row-name">${escapeHtml(group.name)}</span>
+                </span>
+                <span class="chat-row-preview">${escapeHtml(groupPreviewText(group))}</span>
+            </span>
+            ${unread > 0 ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : ""}`;
+        return row;
+    }
+
+    function groupActivityTime(group) {
+        return group.last_message ? Date.parse(group.last_message.timestamp) : Date.parse(group.created_at);
+    }
+
+    function renderGroupsList() {
+        if (!groups.length) {
+            groupsList.innerHTML = `<p class="chat-list-empty">No groups yet. Tap the + button to start one with your contacts.</p>`;
+            return;
+        }
+        groupsList.innerHTML = "";
+        groups
+            .slice()
+            .sort((a, b) => groupActivityTime(b) - groupActivityTime(a))
+            .forEach((group) => groupsList.appendChild(buildGroupRow(group)));
+    }
+
+    groupsList.addEventListener("click", (e) => {
+        const row = e.target.closest(".group-row");
+        if (!row) return;
+        openGroupConversation(row.dataset.groupId);
+    });
+
+    // ---------------------------------------------------------------
+    // Create-group modal — member picker built from everyone we already
+    // know about (existing conversations, plus anyone found via search).
+    // ---------------------------------------------------------------
+    let selectedMemberIds = new Set();
+
+    function renderMemberPicker(filterText) {
+        const q = (filterText || "").trim().toLowerCase();
+        const candidates = Object.values(knownUsers)
+            .filter((u) => u.id !== CURRENT_USER_ID)
+            .filter((u) => !q || (u.full_name || "").toLowerCase().includes(q) || (u.username || "").toLowerCase().includes(q))
+            .sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
+
+        if (!candidates.length) {
+            memberPickerList.innerHTML = `<p class="chat-list-empty">No matching contacts. Message someone from Chats first to add them here.</p>`;
+            return;
+        }
+
+        memberPickerList.innerHTML = "";
+        candidates.forEach((u) => {
+            const row = document.createElement("button");
+            row.type = "button";
+            row.className = "member-picker-row" + (selectedMemberIds.has(u.id) ? " selected" : "");
+            row.dataset.userId = u.id;
+            row.innerHTML = `
+                <span class="avatar">
+                    <img src="/static/uploads/${u.profile_pic}" alt="${escapeHtml(u.full_name)}'s avatar">
+                </span>
+                <span class="member-picker-name">${escapeHtml(u.full_name)}</span>
+                <span class="member-picker-check">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                </span>`;
+            memberPickerList.appendChild(row);
+        });
+    }
+
+    function updateMemberPickerCount() {
+        memberPickerCount.textContent = `${selectedMemberIds.size} selected`;
+    }
+
+    memberPickerList.addEventListener("click", (e) => {
+        const row = e.target.closest(".member-picker-row");
+        if (!row) return;
+        const userId = parseInt(row.dataset.userId, 10);
+        if (selectedMemberIds.has(userId)) {
+            selectedMemberIds.delete(userId);
+            row.classList.remove("selected");
+        } else {
+            selectedMemberIds.add(userId);
+            row.classList.add("selected");
+        }
+        updateMemberPickerCount();
+    });
+
+    let groupMemberSearchDebounce = null;
+    groupMemberSearchInput.addEventListener("input", () => {
+        clearTimeout(groupMemberSearchDebounce);
+        const q = groupMemberSearchInput.value;
+        groupMemberSearchDebounce = setTimeout(async () => {
+            if (q.trim()) {
+                try {
+                    const res = await fetch(`/api/search-users?q=${encodeURIComponent(q.trim())}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        (data.users || []).forEach((u) => {
+                            knownUsers[u.id] = { ...(knownUsers[u.id] || {}), ...u };
+                        });
+                    }
+                } catch (err) { /* fall back to whatever we already know */ }
+            }
+            renderMemberPicker(q);
+        }, 200);
+    });
+
+    function openGroupModal() {
+        groupNameInput.value = "";
+        selectedMemberIds = new Set();
+        groupError.hidden = true;
+        groupMemberSearchInput.value = "";
+        renderMemberPicker("");
+        updateMemberPickerCount();
+        groupModalBackdrop.hidden = false;
+        openOverlay("groupModal", closeGroupModal);
+        setTimeout(() => groupNameInput.focus(), 0);
+    }
+
+    function closeGroupModal() {
+        groupModalBackdrop.hidden = true;
+    }
+
+    newGroupBtn.addEventListener("click", openGroupModal);
+    closeGroupModalBtn.addEventListener("click", () => closeOverlay("groupModal"));
+    groupModalBackdrop.addEventListener("click", (e) => {
+        if (e.target === groupModalBackdrop) closeOverlay("groupModal");
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !groupModalBackdrop.hidden) closeOverlay("groupModal");
+    });
+
+    createGroupBtn.addEventListener("click", async () => {
+        const name = groupNameInput.value.trim();
+        groupError.hidden = true;
+
+        if (!name) {
+            groupError.textContent = "Give your group a name.";
+            groupError.hidden = false;
+            return;
+        }
+        if (selectedMemberIds.size === 0) {
+            groupError.textContent = "Add at least one member.";
+            groupError.hidden = false;
+            return;
+        }
+
+        createGroupBtn.disabled = true;
+        try {
+            const res = await fetch("/api/groups", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name, member_ids: Array.from(selectedMemberIds) }),
+            });
+            const data = await res.json();
+
+            if (!res.ok) {
+                groupError.textContent = data.error || "Could not create group. Please try again.";
+                groupError.hidden = false;
+                return;
+            }
+
+            const group = { ...data.group, messages: [] };
+            groups.push(group);
+            renderGroupsList();
+
+            // Join the group's Socket.IO room right away — the server only
+            // auto-joins rooms for groups a user was already in *at connect
+            // time*, so a group created this session needs an explicit join.
+            if (socket.connected) {
+                socket.emit("join_group", { group_id: group.id });
+            }
+
+            closeOverlay("groupModal");
+            openGroupConversation(group.id);
+        } catch (err) {
+            groupError.textContent = "Could not create group. Please check your connection.";
+            groupError.hidden = false;
+        } finally {
+            createGroupBtn.disabled = false;
+        }
+    });
+
+    // ---------------------------------------------------------------
+    // Group conversation view — reuses the same chat pane markup as a
+    // 1:1 chat (header / messages-scroll / composer), switched into
+    // "group mode": a "Group Chat" badge, a member-count status instead
+    // of presence, and a sender name above each incoming bubble since a
+    // group (unlike a 1:1 chat) can have more than one "other" sender.
+    // ---------------------------------------------------------------
+    function applyGroupHeader(group) {
+        document.getElementById("activeUsername").textContent = group.name;
+        activeAvatarWrapEl.hidden = true;
+        activeGroupAvatarWrapEl.hidden = false;
+        activeHeaderBadgeEl.textContent = "Group Chat";
+        activeHeaderBadgeEl.dataset.kind = "group";
+        activeHeaderBadgeEl.title = "Everyone in this group can see these messages";
+        const statusEl = document.getElementById("activeStatus");
+        statusEl.textContent = `${group.member_count} member${group.member_count === 1 ? "" : "s"}`;
+        statusEl.dataset.state = "";
+        document.title = `${group.name} · Zoble Chat`;
+    }
+
+    // msg fields match GroupMessage.to_dict() from the server: sender_id,
+    // sender_full_name, message_type, image_url, content, timestamp.
+    function renderGroupMessage(msg, animate) {
+        const outgoing = msg.sender_id === CURRENT_USER_ID;
+        const row = document.createElement("div");
+        row.className = "msg-row " + (outgoing ? "outgoing" : "incoming") + (animate ? " msg-enter" : "");
+        row.dataset.messageId = msg.id;
+
+        const isPhoto = msg.message_type === "image" && msg.image_url;
+        const senderLabel = outgoing ? "" : `<span class="group-msg-sender">${escapeHtml(msg.sender_full_name || "Member")}</span>`;
+
+        const bubbleHtml = isPhoto
+            ? `<div class="msg-bubble msg-bubble-photo">
+                   <img class="msg-photo" src="${msg.image_url}" alt="Shared photo" loading="lazy">
+                   <span class="msg-meta">
+                       <span class="msg-time msg-time-photo">${formatTime(msg.timestamp)}</span>
+                   </span>
+               </div>`
+            : `<div class="msg-bubble">
+                   ${escapeHtml(msg.content)}
+                   <span class="msg-meta">
+                       <span class="msg-time">${formatTime(msg.timestamp)}</span>
+                   </span>
+               </div>`;
+
+        row.innerHTML = `
+            <div class="msg-stack">
+                ${senderLabel}
+                <div class="msg-bubble-group">${bubbleHtml}</div>
+            </div>`;
+
+        if (isPhoto) {
+            row.querySelector(".msg-photo").addEventListener("click", () => openLightbox(msg.image_url));
+        }
+
+        messagesScroll.appendChild(row);
+    }
+
+    async function openGroupConversation(groupId) {
+        const group = getGroup(groupId);
+        if (!group) return;
+
+        document.querySelectorAll(".chat-row.active").forEach((r) => r.classList.remove("active"));
+        document.querySelectorAll(`.group-row[data-group-id="${group.id}"]`).forEach((r) => r.classList.add("active"));
+
+        activeConversationType = "group";
+        activeGroupId = group.id;
+        activeUserId = null; // keeps 1:1 send/read-receipt logic from firing while a group is open
+        closeReactionPicker();
+
+        if (group.unread_count) {
+            group.unread_count = 0;
+            renderGroupsList();
+        }
+
+        applyGroupHeader(group);
+
+        emptyState.hidden = true;
+        activeState.hidden = false;
+        const wasClosed = !appShell.classList.contains("conversation-open");
+        appShell.classList.add("conversation-open");
+        if (wasClosed) openOverlay("conversation", closeConversationView);
+
+        messagesScroll.innerHTML = "";
+        messageInput.value = "";
+        messageInput.style.height = "";
+
+        // Fetch full history the first time this group is opened; after
+        // that, `messages` is kept live by the new_group_message handler.
+        if (group.messages === null) {
+            try {
+                const res = await fetch(`/api/groups/${group.id}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    group.messages = data.group.messages || [];
+                    group.members = data.group.members;
+                    group.member_count = data.group.member_count;
+                    group.my_role = data.group.my_role;
+                } else {
+                    group.messages = [];
+                }
+            } catch (err) {
+                group.messages = [];
+            }
+        }
+
+        // Bail if the user navigated to a different conversation while the
+        // fetch above was in flight.
+        if (activeGroupId !== group.id) return;
+
+        group.messages.forEach((msg) => renderGroupMessage(msg, false));
+        scrollMessagesToBottom(false);
+        messageInput.focus();
+
+        if (socket.connected) {
+            socket.emit("join_group", { group_id: group.id });
+        }
+    }
+
+    function sendCurrentGroupMessage() {
+        const content = messageInput.value.trim();
+        const group = getGroup(activeGroupId);
+        if (!content || !group) return;
+
+        if (socket.disconnected) {
+            messagesScroll.insertAdjacentHTML(
+                "beforeend",
+                `<p class="chat-list-empty">Not connected right now — reconnecting… try again in a moment.</p>`
+            );
+            scrollMessagesToBottom(true);
+            return;
+        }
+
+        // No optimistic local echo: the server broadcasts new_group_message
+        // back to every member's room INCLUDING the sender, so the message
+        // renders once the server confirms it, from the same code path as
+        // everyone else's copy — see socket.on("new_group_message") below.
+        socket.emit("send_group_message", { group_id: group.id, content });
+
+        messageInput.value = "";
+        messageInput.style.height = "";
+        messageInput.focus();
+    }
+
+    async function sendGroupPhoto(file) {
+        const group = getGroup(activeGroupId);
+        if (!group) return;
+
+        if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+            showPhotoStatus("Unsupported file type. Use PNG, JPG, GIF, or WEBP.", true);
+            return;
+        }
+        if (file.size > MAX_PHOTO_BYTES) {
+            showPhotoStatus("That photo is too large. Max 5 MB.", true);
+            return;
+        }
+
+        showPhotoStatus("Sending photo…", false);
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const res = await fetch(`/api/groups/${group.id}/messages/photo`, {
+                method: "POST",
+                body: formData,
+            });
+            const data = await res.json();
+
+            if (!res.ok) {
+                showPhotoStatus(data.error || "Could not send photo. Please try again.", true);
+                return;
+            }
+
+            // Rendered via the new_group_message broadcast (see socket
+            // handler below), same as a text send — no local push here.
+            hidePhotoStatus();
+        } catch (err) {
+            showPhotoStatus("Could not send photo. Please check your connection.", true);
+        }
+    }
 
     function bumpUnreadBadge(userId) {
         const row = chatList.querySelector(`.chat-row[data-user-id="${userId}"]`);
@@ -1250,6 +1771,12 @@
         const name = user.full_name || user.username;
         document.getElementById("activeUsername").innerHTML = `${escapeHtml(name)}${verifiedBadgeHtml(user)}`;
         document.getElementById("activeAvatar").src = `/static/uploads/${user.profile_pic}`;
+        document.getElementById("activeAvatarWrap").hidden = false;
+        document.getElementById("activeGroupAvatarWrap").hidden = true;
+        const badgeEl = document.getElementById("activeHeaderBadge");
+        badgeEl.textContent = "Private Chat";
+        badgeEl.dataset.kind = "";
+        badgeEl.title = "Only you and this person can see these messages";
         setActiveStatus(!!user.online, user.last_seen || null);
         // Tab title reflects that this is a private 1:1 conversation, not a
         // public/group room.
@@ -1257,6 +1784,8 @@
     }
 
     async function openConversationForId(userId) {
+        activeConversationType = "user";
+        activeGroupId = null;
         document.querySelectorAll(".chat-row.active").forEach(r => r.classList.remove("active"));
         document.querySelectorAll(`.chat-row[data-user-id="${userId}"]`).forEach(r => r.classList.add("active"));
         const row = chatList.querySelector(`.chat-row[data-user-id="${userId}"]`);
@@ -1558,6 +2087,11 @@
     });
 
     function sendCurrentMessage() {
+        if (activeConversationType === "group") {
+            sendCurrentGroupMessage();
+            return;
+        }
+
         const content = messageInput.value.trim();
         if (!content || !activeUserId) return;
 
@@ -1611,6 +2145,12 @@
     photoInput.addEventListener("change", async () => {
         const file = photoInput.files && photoInput.files[0];
         if (!file) return;
+
+        if (activeConversationType === "group") {
+            await sendGroupPhoto(file);
+            photoInput.value = "";
+            return;
+        }
 
         if (!activeUserId) {
             photoInput.value = "";
@@ -1717,6 +2257,44 @@
         // made from one of our own other open tabs — this tab's own reacts
         // already update instantly via sendReaction()'s response.
         updateMessageReactions(payload.message_id, payload.reactions);
+    });
+
+    // ---------------------------------------------------------------
+    // Groups — live updates. A new group appearing (group_created) and a
+    // new message inside one (new_group_message) are separate events
+    // because the former can reach a member who has no local `groups`
+    // entry for it yet at all.
+    // ---------------------------------------------------------------
+    socket.on("group_created", (payload) => {
+        if (getGroup(payload.id)) return; // our own tab already added it locally
+        groups.push({ ...payload, messages: null });
+        renderGroupsList();
+        if (socket.connected) {
+            socket.emit("join_group", { group_id: payload.id });
+        }
+    });
+
+    socket.on("new_group_message", (msg) => {
+        const group = getGroup(msg.group_id);
+        if (!group) return; // message for a group we don't know about yet — ignore
+
+        group.last_message = msg;
+
+        const isOpenGroup = activeConversationType === "group" && activeGroupId === group.id;
+        if (isOpenGroup) {
+            if (group.messages === null) group.messages = [];
+            group.messages.push(msg);
+            renderGroupMessage(msg, true);
+            scrollMessagesToBottom(true);
+        } else if (group.messages !== null) {
+            group.messages.push(msg);
+        }
+
+        if (!isOpenGroup && msg.sender_id !== CURRENT_USER_ID) {
+            group.unread_count = (group.unread_count || 0) + 1;
+        }
+
+        renderGroupsList();
     });
 
     // ---------------------------------------------------------------
