@@ -225,6 +225,46 @@
         </div>
     </div>
 
+    <!-- ============ ACCOUNT PAGE MODAL (opened by tapping a name/avatar
+         in the news feed) ============ -->
+    <div class="modal-backdrop" id="accountModalBackdrop" hidden>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="accountModalName">
+            <div class="modal-header">
+                <h2>Account</h2>
+                <button class="btn-icon" id="closeAccountBtn" title="Close" type="button">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="modal-body account-modal-body">
+                <div class="account-modal-head">
+                    <span class="avatar avatar-lg" id="accountAvatarWrap">
+                        <img id="accountAvatarImg" src="" alt="">
+                    </span>
+                    <span class="account-modal-name" id="accountModalName"></span>
+                    <span class="account-modal-username" id="accountModalUsername"></span>
+                    <div class="account-modal-stats">
+                        <span><strong id="accountFollowerCount">0</strong> followers</span>
+                        <span><strong id="accountFollowingCount">0</strong> following</span>
+                    </div>
+                </div>
+
+                <div class="account-modal-actions">
+                    <button class="btn btn-secondary account-chat-btn" id="accountChatBtn" type="button">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        <span>Chat</span>
+                    </button>
+                    <button class="btn btn-primary account-follow-btn" id="accountFollowBtn" type="button">Follow</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ============ FIND CONTACTS MODAL ============ -->
     <div class="modal-backdrop" id="contactsModalBackdrop" hidden>
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="contactsModalTitle">
@@ -593,6 +633,18 @@
 
 <script>
     const CURRENT_USER_ID = {{ current_user_data.id }};
+    // Mirrors CURRENT_USER_ID with the rest of this account's identity, kept
+    // current by applyIdentityUpdate() below whenever the name or photo
+    // changes. Lets the profile-save handlers build a full identity payload
+    // for a partial change (e.g. just the photo) without waiting on a round
+    // trip through the socket broadcast.
+    const CURRENT_USER_IDENTITY = {
+        user_id: CURRENT_USER_ID,
+        full_name: {{ current_user_data.full_name|tojson }},
+        profile_pic: {{ current_user_data.profile_pic|tojson }},
+        is_verified: {{ 'true' if current_user_data.is_verified else 'false' }},
+        is_admin: {{ 'true' if current_user_data.is_admin else 'false' }},
+    };
     const FEED_UNREAD_COUNT_INITIAL = {{ feed_unread_count }};
 
     const appShell = document.querySelector(".app-shell");
@@ -644,6 +696,20 @@
         const top = overlayStack.pop();
         if (top) top.closeFn();
     });
+
+    // closeOverlay() only takes effect on the *next* popstate event (see
+    // above), so closing two stacked overlays back-to-back (e.g. the
+    // account page sitting on top of the feed) can't just call closeOverlay
+    // twice in a row — the second call would still see the first overlay
+    // on top of the stack and no-op. This chains a callback to run once
+    // that first close has actually gone through.
+    function closeOverlayThen(name, callback) {
+        window.addEventListener("popstate", function handler() {
+            window.removeEventListener("popstate", handler);
+            if (callback) callback();
+        }, { once: true });
+        closeOverlay(name);
+    }
 
 
     // Caches everything we know about a user (name, avatar, presence) keyed
@@ -1481,9 +1547,9 @@
 
         card.innerHTML = `
             <div class="feed-card-header">
-                <span class="avatar avatar-sm"><img src="/static/uploads/${post.profile_pic}" alt="${escapeHtml(post.full_name || post.username)}"></span>
+                <span class="avatar avatar-sm feed-card-account-trigger" data-user-id="${post.user_id}"><img src="/static/uploads/${post.profile_pic}" alt="${escapeHtml(post.full_name || post.username)}"></span>
                 <span class="feed-card-identity">
-                    <span class="feed-card-name">${escapeHtml(post.full_name || post.username)}${verifiedBadgeHtml(post)}</span>
+                    <span class="feed-card-name feed-card-account-trigger" data-user-id="${post.user_id}">${escapeHtml(post.full_name || post.username)}${verifiedBadgeHtml(post)}</span>
                     <span class="feed-card-time">${feedTimeAgo(post.created_at)}</span>
                 </span>
                 <button class="btn-icon feed-card-delete" type="button" title="Delete post" ${isOwn ? "" : "hidden"}>
@@ -1664,6 +1730,12 @@
         if (!card) return;
         const postId = parseInt(card.dataset.postId, 10);
 
+        const accountTrigger = e.target.closest(".feed-card-account-trigger");
+        if (accountTrigger) {
+            openAccountModal(parseInt(accountTrigger.dataset.userId, 10));
+            return;
+        }
+
         if (e.target.closest(".feed-like-btn")) {
             const btn = card.querySelector(".feed-like-btn");
             btn.disabled = true;
@@ -1785,7 +1857,7 @@
             return;
         }
         feedCommentsList.innerHTML = comments.map((c) => `
-            <div class="feed-comment-row">
+            <div class="feed-comment-row" data-user-id="${c.user_id}">
                 <span class="avatar avatar-sm"><img src="/static/uploads/${c.profile_pic}" alt="${escapeHtml(c.full_name || c.username)}"></span>
                 <span class="feed-comment-body">
                     <span class="feed-comment-name">${escapeHtml(c.full_name || c.username)}${verifiedBadgeHtml(c)}</span>
@@ -1994,6 +2066,125 @@
         });
         if (userId === activeUserId) setActiveStatus(online, lastSeen);
         renderOnlineList();
+    }
+
+    // A user's name/photo/badges live in exactly one place server-side (the
+    // User row — see Post.to_dict() and User.to_dict() in app.py), so the
+    // chat sidebar, conversation header, group member lists, story ring,
+    // and news feed are all just different views onto the same account.
+    // This is what keeps every one of those views in sync the moment a
+    // name or photo changes, instead of whichever ones were already
+    // rendered on screen hanging on to the old value until a page reload.
+    // Called both locally (right after *this* tab saves a change, so it
+    // doesn't have to wait on a round trip) and from the "profile_updated"
+    // socket broadcast (so every other open tab/device, and every other
+    // signed-in user currently looking at this account's name or posts,
+    // updates too).
+    function applyIdentityUpdate(identity) {
+        const userId = identity.user_id;
+        const user = knownUsers[userId] || { id: userId };
+        user.full_name = identity.full_name;
+        user.profile_pic = identity.profile_pic;
+        user.is_verified = !!identity.is_verified;
+        user.is_admin = !!identity.is_admin;
+        knownUsers[userId] = user;
+
+        // Sidebar chat rows (and the search-results / member-picker rows
+        // that were built from the same buildChatRow-style markup) all tag
+        // themselves with data-user-id, so one selector covers every place
+        // this account's row is currently on screen.
+        document.querySelectorAll(`.chat-row[data-user-id="${userId}"]`).forEach((row) => {
+            row.dataset.fullname = identity.full_name;
+            row.dataset.profilePic = identity.profile_pic;
+            row.dataset.verified = identity.is_verified ? "true" : "false";
+            row.dataset.admin = identity.is_admin ? "true" : "false";
+            const img = row.querySelector(".avatar img");
+            if (img) {
+                img.src = `/static/uploads/${identity.profile_pic}`;
+                img.alt = `${identity.full_name}'s avatar`;
+            }
+            const nameEl = row.querySelector(".chat-row-name");
+            if (nameEl) nameEl.innerHTML = `${escapeHtml(identity.full_name)}${verifiedBadgeHtml(user)}`;
+        });
+
+        // Open 1:1 conversation header, if this account is the one currently
+        // being chatted with.
+        if (activeConversationType === "user" && activeUserId === userId) {
+            applyActiveHeader(user);
+        }
+
+        // Any already-loaded feed posts by this account — the header name
+        // and avatar are the part that would otherwise go stale, since the
+        // rest of the card (text/photo/likes) doesn't depend on identity.
+        let feedChanged = false;
+        feedPosts.forEach((post) => {
+            if (post.user_id !== userId) return;
+            post.full_name = identity.full_name;
+            post.profile_pic = identity.profile_pic;
+            post.is_verified = identity.is_verified;
+            post.is_admin = identity.is_admin;
+            feedChanged = true;
+        });
+        if (feedChanged) {
+            feedTrack.querySelectorAll(".feed-card").forEach((card) => {
+                const post = feedPosts.find((p) => p.id === card.dataset.postId || p.id === Number(card.dataset.postId));
+                if (!post || post.user_id !== userId) return;
+                const img = card.querySelector(".feed-card-header .avatar img");
+                if (img) img.src = `/static/uploads/${identity.profile_pic}`;
+                const nameEl = card.querySelector(".feed-card-name");
+                if (nameEl) nameEl.innerHTML = `${escapeHtml(identity.full_name)}${verifiedBadgeHtml(post)}`;
+            });
+        }
+
+        // Currently-rendered comment rows for this account (comments are
+        // fetched fresh each time the drawer opens, so this only matters
+        // while it's already open).
+        feedCommentsList.querySelectorAll(".feed-comment-row").forEach((row) => {
+            if (row.dataset.userId !== String(userId)) return;
+            const img = row.querySelector(".avatar img");
+            if (img) img.src = `/static/uploads/${identity.profile_pic}`;
+            const nameEl = row.querySelector(".feed-comment-name");
+            if (nameEl) nameEl.innerHTML = `${escapeHtml(identity.full_name)}${verifiedBadgeHtml(user)}`;
+        });
+
+        // Story ring label/avatar and the full-screen story viewer header.
+        const storyEntry = storiesByUser[userId];
+        if (storyEntry) {
+            storyEntry.full_name = identity.full_name;
+            storyEntry.profile_pic = identity.profile_pic;
+            renderStoriesBar();
+            if (viewingUserId === userId) {
+                storyViewerAvatar.src = `/static/uploads/${identity.profile_pic}`;
+                storyViewerName.textContent = userId === CURRENT_USER_ID ? "Your story" : identity.full_name;
+            }
+        }
+
+        // Group member lists — update every cached group's member rows, and
+        // re-render the group-info modal if it's open on one of them.
+        groups.forEach((group) => {
+            (group.members || []).forEach((m) => {
+                if (m.user_id !== userId) return;
+                m.full_name = identity.full_name;
+                m.profile_pic = identity.profile_pic;
+            });
+        });
+        if (!groupInfoModalBackdrop.hidden && groupInfoGroupId != null) {
+            const openGroup = getGroup(groupInfoGroupId);
+            if (openGroup && (openGroup.members || []).some((m) => m.user_id === userId)) {
+                renderGroupInfoModal(openGroup);
+            }
+        }
+
+        // This tab's own header/profile-modal chrome.
+        if (userId === CURRENT_USER_ID) {
+            CURRENT_USER_IDENTITY.full_name = identity.full_name;
+            CURRENT_USER_IDENTITY.profile_pic = identity.profile_pic;
+            CURRENT_USER_IDENTITY.is_verified = identity.is_verified;
+            CURRENT_USER_IDENTITY.is_admin = identity.is_admin;
+            ownAvatar.src = `/static/uploads/${identity.profile_pic}`;
+            ownFullName.innerHTML = `${escapeHtml(identity.full_name)}${verifiedBadgeHtml(user)}`;
+            profileAvatarPreview.src = `/static/uploads/${identity.profile_pic}`;
+        }
     }
 
     // ---------------------------------------------------------------
@@ -3466,6 +3657,11 @@
     // ---------------------------------------------------------------
     const socket = io({ transports: ["websocket", "polling"] });
 
+    // Keeps this account's name/photo/badges in sync everywhere they're
+    // shown — see applyIdentityUpdate() above — whenever *any* signed-in
+    // user (this tab included) saves a name or photo change.
+    socket.on("profile_updated", applyIdentityUpdate);
+
     socket.on("connect", () => setConnStatus("online"));
     socket.on("disconnect", (reason) => {
         setConnStatus("offline");
@@ -3710,6 +3906,101 @@
     });
 
     // ---------------------------------------------------------------
+    // Account page — opened by tapping a name/avatar in the news feed.
+    // Shows that person's basic profile plus Chat and Follow buttons.
+    // ---------------------------------------------------------------
+    const accountModalBackdrop = document.getElementById("accountModalBackdrop");
+    const closeAccountBtn = document.getElementById("closeAccountBtn");
+    const accountAvatarImg = document.getElementById("accountAvatarImg");
+    const accountModalName = document.getElementById("accountModalName");
+    const accountModalUsername = document.getElementById("accountModalUsername");
+    const accountFollowerCount = document.getElementById("accountFollowerCount");
+    const accountFollowingCount = document.getElementById("accountFollowingCount");
+    const accountChatBtn = document.getElementById("accountChatBtn");
+    const accountFollowBtn = document.getElementById("accountFollowBtn");
+
+    let accountModalUserId = null;
+
+    function renderFollowBtn(isFollowing) {
+        accountFollowBtn.textContent = isFollowing ? "Following" : "Follow";
+        accountFollowBtn.classList.toggle("btn-primary", !isFollowing);
+        accountFollowBtn.classList.toggle("btn-secondary", isFollowing);
+    }
+
+    async function openAccountModal(userId) {
+        if (!userId) return;
+        accountModalUserId = userId;
+
+        // Show whatever we already know instantly (from knownUsers / the
+        // feed post itself), then refresh with the real counts + follow
+        // state from the server once it arrives.
+        const cached = knownUsers[userId];
+        if (cached) {
+            accountAvatarImg.src = `/static/uploads/${cached.profile_pic}`;
+            accountModalName.innerHTML = `${escapeHtml(cached.full_name)}${verifiedBadgeHtml(cached)}`;
+            accountModalUsername.textContent = cached.username ? `@${cached.username}` : "";
+        }
+        accountChatBtn.hidden = userId === CURRENT_USER_ID;
+        accountFollowBtn.hidden = userId === CURRENT_USER_ID;
+
+        accountModalBackdrop.hidden = false;
+        openOverlay("accountModal", closeAccountModal);
+
+        try {
+            const res = await fetch(`/api/users/${userId}/profile`);
+            if (!res.ok) return;
+            const data = await res.json();
+            const user = data.user;
+            if (accountModalUserId !== userId) return; // switched before this resolved
+
+            knownUsers[userId] = { ...(knownUsers[userId] || {}), ...user };
+            accountAvatarImg.src = `/static/uploads/${user.profile_pic}`;
+            accountModalName.innerHTML = `${escapeHtml(user.full_name)}${verifiedBadgeHtml(user)}`;
+            accountModalUsername.textContent = `@${user.username}`;
+            accountFollowerCount.textContent = user.follower_count;
+            accountFollowingCount.textContent = user.following_count;
+            accountChatBtn.hidden = user.is_own;
+            accountFollowBtn.hidden = user.is_own;
+            if (!user.is_own) renderFollowBtn(user.is_following);
+        } catch (err) { /* keep showing the cached snapshot */ }
+    }
+
+    function closeAccountModal() {
+        accountModalBackdrop.hidden = true;
+        accountModalUserId = null;
+    }
+
+    closeAccountBtn.addEventListener("click", () => closeOverlay("accountModal"));
+    accountModalBackdrop.addEventListener("click", (e) => {
+        if (e.target === accountModalBackdrop) closeOverlay("accountModal");
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !accountModalBackdrop.hidden) closeOverlay("accountModal");
+    });
+
+    accountChatBtn.addEventListener("click", () => {
+        if (!accountModalUserId) return;
+        const userId = accountModalUserId;
+        closeOverlayThen("accountModal", () => {
+            closeOverlayThen("feed", () => openConversationForId(userId));
+        });
+    });
+
+    accountFollowBtn.addEventListener("click", async () => {
+        if (!accountModalUserId) return;
+        accountFollowBtn.disabled = true;
+        try {
+            const res = await fetch(`/api/users/${accountModalUserId}/follow`, { method: "POST" });
+            if (res.ok) {
+                const data = await res.json();
+                renderFollowBtn(data.following);
+                accountFollowerCount.textContent = data.follower_count;
+            }
+        } catch (err) { /* ignore — button just stays in its last known state */ }
+        finally { accountFollowBtn.disabled = false; }
+    });
+
+    // ---------------------------------------------------------------
     // Profile modal — edit display name and profile picture
     // ---------------------------------------------------------------
     const profileModalBackdrop = document.getElementById("profileModalBackdrop");
@@ -3806,9 +4097,7 @@
                 return;
             }
 
-            const newSrc = `/static/uploads/${data.profile_pic}?v=${Date.now()}`;
-            profileAvatarPreview.src = newSrc;
-            ownAvatar.src = newSrc;
+            applyIdentityUpdate({ ...CURRENT_USER_IDENTITY, profile_pic: data.profile_pic });
             profileSuccess.textContent = "Profile picture updated.";
             profileSuccess.hidden = false;
         } catch (err) {
@@ -3845,7 +4134,12 @@
                 return;
             }
 
-            ownFullName.innerHTML = `${escapeHtml(data.user.full_name)}${verifiedBadgeHtml(data.user)}`;
+            applyIdentityUpdate({
+                ...CURRENT_USER_IDENTITY,
+                full_name: data.user.full_name,
+                is_verified: data.user.is_verified,
+                is_admin: data.user.is_admin,
+            });
             profileSuccess.textContent = "Name updated.";
             profileSuccess.hidden = false;
             setTimeout(closeProfileModal, 700);
