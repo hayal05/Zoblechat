@@ -324,14 +324,17 @@ a:focus-visible {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.35; }
 }
-/* Top bar: search box + profile avatar, side by side, right above the tabs */
+/* Top bar: search box + profile avatar, side by side, right above the tabs
+   — kept deliberately compact so it (and the stories strip below it)
+   leave more room for the news feed page on mobile, where both float
+   above the feed overlay and push its content down. */
 .sidebar-topbar {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin: 12px 16px 4px;
+    gap: 8px;
+    margin: 6px 16px 2px;
 }
-.sidebar-topbar .search-box { margin: 0; flex: 1; min-width: 0; }
+.sidebar-topbar .search-box { margin: 0; flex: 1; min-width: 0; padding: 5px 9px; }
 
 .profile-avatar-wrap { position: relative; flex-shrink: 0; }
 .profile-avatar-btn {
@@ -1254,8 +1257,8 @@ a:focus-visible {
    --------------------------------------------------------------------- */
 .stories-bar {
     display: flex;
-    gap: 14px;
-    padding: 12px 16px 10px;
+    gap: 10px;
+    padding: 8px 16px 6px;
     overflow-x: auto;
     scrollbar-width: none;
     border-bottom: 1px solid var(--border);
@@ -1266,9 +1269,9 @@ a:focus-visible {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
     flex-shrink: 0;
-    width: 60px;
+    width: 48px;
     border: none;
     background: transparent;
     cursor: pointer;
@@ -1278,10 +1281,10 @@ a:focus-visible {
 
 .story-ring-avatar {
     position: relative;
-    width: 56px;
-    height: 56px;
+    width: 44px;
+    height: 44px;
     border-radius: 50%;
-    padding: 2.5px;
+    padding: 2px;
     background: var(--story-ring-gradient);
     display: flex;
     align-items: center;
@@ -1306,8 +1309,8 @@ a:focus-visible {
     position: absolute;
     right: -2px;
     bottom: -2px;
-    width: 20px;
-    height: 20px;
+    width: 16px;
+    height: 16px;
     border-radius: 50%;
     background: var(--brand);
     color: #fff;
@@ -1315,7 +1318,7 @@ a:focus-visible {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 700;
     line-height: 1;
     cursor: pointer;
@@ -1323,10 +1326,10 @@ a:focus-visible {
 .story-add-badge:hover { background: var(--brand-dark); }
 
 .story-ring-label {
-    font-size: 11.5px;
+    font-size: 10.5px;
     font-weight: 600;
     color: var(--ink-soft);
-    max-width: 60px;
+    max-width: 48px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1597,15 +1600,14 @@ a:focus-visible {
 .feed-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 14px 20px;
+    justify-content: flex-end;
+    padding: 8px 20px;
     flex-shrink: 0;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
     color: var(--ink);
     z-index: 3;
 }
-.feed-header-title { font-size: 16px; font-weight: 800; letter-spacing: -0.01em; color: var(--ink); }
 .feed-header-hint { font-size: 12px; font-weight: 600; color: var(--ink-faint); }
 
 /* Vertical, scrollable post list — scrolls up and down natively, no
