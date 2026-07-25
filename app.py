@@ -432,6 +432,12 @@ class Group(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(60), nullable=False)
+    # Filename only (same storage convention as User.profile_pic), living in
+    # UPLOAD_FOLDER. Nullable/None means "no custom photo" — the client
+    # falls back to the generic group icon (.avatar-group) rather than a
+    # shared default image file, since unlike user avatars there's no
+    # single sensible "default group photo".
+    photo = db.Column(db.String(255), nullable=True)
     # ON DELETE SET NULL — a group outlives its creator's account being
     # deleted; who's an admin is tracked in GroupMember, not here.
     created_by = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
@@ -450,6 +456,7 @@ class Group(db.Model):
         return {
             "id": self.id,
             "name": self.name,
+            "photo": self.photo,
             "created_by": self.created_by,
             "created_at": to_iso_utc(self.created_at),
             "member_count": len(member_rows),
@@ -634,6 +641,14 @@ def _ensure_schema():
             with db.engine.begin() as conn:
                 conn.execute(text("ALTER TABLE messages ADD COLUMN image_path VARCHAR(255)"))
 
+    if "groups" in inspector.get_table_names():
+        existing_group_columns = {col["name"] for col in inspector.get_columns("groups")}
+
+        if "photo" not in existing_group_columns:
+            logger.info("Migrating groups table: adding 'photo' column")
+            with db.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE groups ADD COLUMN photo VARCHAR(255)"))
+
 
 with app.app_context():
     db.create_all()
@@ -727,6 +742,16 @@ def is_group_member(group_id, user_id):
     return db.session.query(
         GroupMember.query.filter_by(group_id=group_id, user_id=user_id).exists()
     ).scalar()
+
+
+def is_group_admin(group_id, user_id):
+    return db.session.query(
+        GroupMember.query.filter_by(group_id=group_id, user_id=user_id, role="admin").exists()
+    ).scalar()
+
+
+def get_group_admin_count(group_id):
+    return GroupMember.query.filter_by(group_id=group_id, role="admin").count()
 
 
 def get_user_group_ids(user_id):
@@ -1718,6 +1743,405 @@ def send_group_photo_message(group_id):
     socketio.emit("new_group_message", payload, room=get_group_room_name(group_id))
 
     return jsonify({"message": "Photo sent.", "data": payload}), 201
+
+
+@app.route("/api/groups/<int:group_id>", methods=["PATCH"])
+@login_required
+@limiter.limit("30 per hour")
+def update_group(group_id):
+    """Renames a group. Admin-only, same as changing the group photo —
+    letting any member rename the group out from under everyone else is
+    the kind of griefing vector a chat app has to design against."""
+    group = Group.query.get(group_id)
+    if not group:
+        return jsonify({"error": "Group not found."}), 404
+
+    if not is_group_member(group_id, current_user.id):
+        return jsonify({"error": "You are not a member of this group."}), 403
+    if not is_group_admin(group_id, current_user.id):
+        return jsonify({"error": "Only a group admin can rename this group."}), 403
+
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Group name is required."}), 400
+    if len(name) > 60:
+        return jsonify({"error": "Group name must be 60 characters or fewer."}), 400
+
+    group.name = name
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to rename group")
+        return jsonify({"error": "Could not rename group. Please try again."}), 500
+
+    payload = group.to_dict(viewer_id=current_user.id)
+    # Every member's open tab should see the new name immediately, in the
+    # sidebar list and in an open conversation header alike.
+    socketio.emit("group_updated", payload, room=get_group_room_name(group_id))
+
+    return jsonify({"group": payload}), 200
+
+
+@app.route("/api/groups/<int:group_id>/photo", methods=["POST"])
+@login_required
+@limiter.limit("20 per hour")
+def update_group_photo(group_id):
+    """Uploads/replaces a group's photo. Admin-only. Mirrors
+    update_profile_picture(), just scoped to a Group instead of the
+    current user, and broadcasting the change to the group's room."""
+    group = Group.query.get(group_id)
+    if not group:
+        return jsonify({"error": "Group not found."}), 404
+
+    if not is_group_member(group_id, current_user.id):
+        return jsonify({"error": "You are not a member of this group."}), 403
+    if not is_group_admin(group_id, current_user.id):
+        return jsonify({"error": "Only a group admin can change this group's photo."}), 403
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file part in the request."}), 400
+
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "No file selected."}), 400
+
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Unsupported file type. Use PNG, JPG, GIF, or WEBP."}), 400
+
+    # secure_filename strips path traversal characters; we also prefix with
+    # "group_<id>_" + a uuid so filenames can never collide or be guessed,
+    # and so a group's photo history is trivially distinguishable from any
+    # user's profile picture living in the same upload folder.
+    original_name = secure_filename(file.filename)
+    ext = original_name.rsplit(".", 1)[1].lower()
+    unique_name = f"group_{group.id}_{uuid.uuid4().hex}.{ext}"
+    filepath = os.path.join(app.config["UPLOAD_FOLDER"], unique_name)
+
+    try:
+        file.save(filepath)
+    except OSError:
+        logger.exception("Failed to save uploaded group photo")
+        return jsonify({"error": "Could not save the uploaded file."}), 500
+
+    if not verify_is_real_image(filepath):
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        return jsonify({"error": "The uploaded file is not a valid image."}), 400
+
+    old_photo = group.photo
+    group.photo = unique_name
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        logger.exception("Failed to update group photo in DB")
+        return jsonify({"error": "Could not update group photo. Please try again."}), 500
+
+    if old_photo:
+        old_path = os.path.join(app.config["UPLOAD_FOLDER"], old_photo)
+        if os.path.exists(old_path):
+            try:
+                os.remove(old_path)
+            except OSError:
+                logger.warning("Could not remove old group photo: %s", old_photo)
+
+    payload = group.to_dict(viewer_id=current_user.id)
+    socketio.emit("group_updated", payload, room=get_group_room_name(group_id))
+
+    return jsonify({"message": "Group photo updated.", "group": payload}), 200
+
+
+@app.route("/api/groups/<int:group_id>/photo", methods=["DELETE"])
+@login_required
+@limiter.limit("20 per hour")
+def remove_group_photo(group_id):
+    """Clears a group's custom photo, reverting the client to the generic
+    group icon. Admin-only, same reasoning as setting one."""
+    group = Group.query.get(group_id)
+    if not group:
+        return jsonify({"error": "Group not found."}), 404
+
+    if not is_group_member(group_id, current_user.id):
+        return jsonify({"error": "You are not a member of this group."}), 403
+    if not is_group_admin(group_id, current_user.id):
+        return jsonify({"error": "Only a group admin can change this group's photo."}), 403
+
+    old_photo = group.photo
+    if not old_photo:
+        return jsonify({"group": group.to_dict(viewer_id=current_user.id)}), 200
+
+    group.photo = None
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to remove group photo")
+        return jsonify({"error": "Could not remove group photo. Please try again."}), 500
+
+    old_path = os.path.join(app.config["UPLOAD_FOLDER"], old_photo)
+    if os.path.exists(old_path):
+        try:
+            os.remove(old_path)
+        except OSError:
+            logger.warning("Could not remove old group photo: %s", old_photo)
+
+    payload = group.to_dict(viewer_id=current_user.id)
+    socketio.emit("group_updated", payload, room=get_group_room_name(group_id))
+
+    return jsonify({"message": "Group photo removed.", "group": payload}), 200
+
+
+@app.route("/api/groups/<int:group_id>/members", methods=["POST"])
+@login_required
+@limiter.limit("30 per hour")
+def add_group_members(group_id):
+    """Adds one or more existing users to a group. Admin-only. Newly added
+    members haven't joined the group's Socket.IO room yet (they only do
+    that from join_group, client-side, once they know the group exists),
+    so — same as create_group — we push straight to each new member's
+    private room rather than the group room for the "you're in a group
+    now" notification, and to the group room for everyone already there.
+    """
+    group = Group.query.get(group_id)
+    if not group:
+        return jsonify({"error": "Group not found."}), 404
+
+    if not is_group_member(group_id, current_user.id):
+        return jsonify({"error": "You are not a member of this group."}), 403
+    if not is_group_admin(group_id, current_user.id):
+        return jsonify({"error": "Only a group admin can add members."}), 403
+
+    data = request.get_json(silent=True) or {}
+    raw_member_ids = data.get("member_ids") or []
+    if not isinstance(raw_member_ids, list):
+        return jsonify({"error": "member_ids must be an array."}), 400
+    if len(raw_member_ids) > 250:
+        return jsonify({"error": "Cannot add more than 250 members at once."}), 400
+
+    try:
+        member_ids = {int(uid) for uid in raw_member_ids}
+    except (TypeError, ValueError):
+        return jsonify({"error": "member_ids must contain valid user ids."}), 400
+
+    if not member_ids:
+        return jsonify({"error": "No members to add."}), 400
+
+    found_count = User.query.filter(User.id.in_(member_ids)).count()
+    if found_count != len(member_ids):
+        return jsonify({"error": "One or more member_ids do not exist."}), 400
+
+    existing_member_ids = {
+        uid for (uid,) in db.session.query(GroupMember.user_id).filter_by(group_id=group_id).all()
+    }
+    new_ids = member_ids - existing_member_ids
+    if not new_ids:
+        return jsonify({"error": "Everyone selected is already in this group."}), 400
+
+    try:
+        for uid in new_ids:
+            db.session.add(GroupMember(group_id=group_id, user_id=uid, role="member"))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to add group members")
+        return jsonify({"error": "Could not add members. Please try again."}), 500
+
+    payload = group.to_dict(viewer_id=current_user.id)
+
+    # Existing members' open tabs get a live-updated member list/count.
+    socketio.emit("group_updated", payload, room=get_group_room_name(group_id))
+    # Newly added members get the group appear in their sidebar, the same
+    # event create_group() uses for the initial member set.
+    for uid in new_ids:
+        socketio.emit("group_created", group.to_dict(viewer_id=uid), room=get_room_name(uid))
+
+    return jsonify({"group": payload}), 200
+
+
+@app.route("/api/groups/<int:group_id>/members/<int:user_id>", methods=["DELETE"])
+@login_required
+@limiter.limit("30 per hour")
+def remove_group_member(group_id, user_id):
+    """Removes another member from the group. Admin-only, and not usable
+    on yourself — that's what POST /api/groups/<id>/leave is for, which
+    also handles the "I'm the last admin" succession logic that a forced
+    removal never needs to."""
+    group = Group.query.get(group_id)
+    if not group:
+        return jsonify({"error": "Group not found."}), 404
+
+    if not is_group_member(group_id, current_user.id):
+        return jsonify({"error": "You are not a member of this group."}), 403
+    if not is_group_admin(group_id, current_user.id):
+        return jsonify({"error": "Only a group admin can remove members."}), 403
+
+    if user_id == current_user.id:
+        return jsonify({"error": "Use 'Leave group' to remove yourself."}), 400
+
+    member = GroupMember.query.filter_by(group_id=group_id, user_id=user_id).first()
+    if not member:
+        return jsonify({"error": "That user is not a member of this group."}), 404
+
+    try:
+        db.session.delete(member)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to remove group member")
+        return jsonify({"error": "Could not remove member. Please try again."}), 500
+
+    payload = group.to_dict(viewer_id=current_user.id)
+    socketio.emit("group_updated", payload, room=get_group_room_name(group_id))
+    # Tell the removed member's own tabs directly — they're no longer a
+    # member, so they won't get the group_updated broadcast above (it only
+    # reaches the group's Socket.IO room, which client-side leave logic
+    # only triggers on *this* event, not the other way around).
+    socketio.emit(
+        "group_member_removed",
+        {"group_id": group_id, "user_id": user_id, "removed_by": current_user.id},
+        room=get_room_name(user_id),
+    )
+
+    return jsonify({"group": payload}), 200
+
+
+@app.route("/api/groups/<int:group_id>/members/<int:user_id>/role", methods=["PATCH"])
+@login_required
+@limiter.limit("30 per hour")
+def change_group_member_role(group_id, user_id):
+    """Promotes a member to admin or demotes an admin to member.
+    Admin-only. Demoting the group's last remaining admin is blocked —
+    that would leave the group with nobody able to manage it (rename,
+    change photo, add/remove members) short of a database edit."""
+    group = Group.query.get(group_id)
+    if not group:
+        return jsonify({"error": "Group not found."}), 404
+
+    if not is_group_member(group_id, current_user.id):
+        return jsonify({"error": "You are not a member of this group."}), 403
+    if not is_group_admin(group_id, current_user.id):
+        return jsonify({"error": "Only a group admin can change member roles."}), 403
+
+    data = request.get_json(silent=True) or {}
+    role = data.get("role")
+    if role not in ("admin", "member"):
+        return jsonify({"error": "role must be 'admin' or 'member'."}), 400
+
+    member = GroupMember.query.filter_by(group_id=group_id, user_id=user_id).first()
+    if not member:
+        return jsonify({"error": "That user is not a member of this group."}), 404
+
+    if member.role == role:
+        return jsonify({"group": group.to_dict(viewer_id=current_user.id)}), 200
+
+    if member.role == "admin" and role == "member" and get_group_admin_count(group_id) <= 1:
+        return jsonify({
+            "error": "This is the only admin left. Promote someone else to admin first."
+        }), 400
+
+    member.role = role
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to change group member role")
+        return jsonify({"error": "Could not update that member's role. Please try again."}), 500
+
+    payload = group.to_dict(viewer_id=current_user.id)
+    socketio.emit("group_updated", payload, room=get_group_room_name(group_id))
+
+    return jsonify({"group": payload}), 200
+
+
+@app.route("/api/groups/<int:group_id>/leave", methods=["POST"])
+@login_required
+@limiter.limit("30 per hour")
+def leave_group(group_id):
+    """Removes the current user from a group. If they're the group's last
+    remaining member, the group (and its messages/photo) is deleted
+    outright. If they're the sole admin with other members still present,
+    the longest-standing remaining member is auto-promoted to admin so
+    the group is never left with zero admins — same reasoning as the
+    block in change_group_member_role()."""
+    group = Group.query.get(group_id)
+    if not group:
+        return jsonify({"error": "Group not found."}), 404
+
+    member = GroupMember.query.filter_by(group_id=group_id, user_id=current_user.id).first()
+    if not member:
+        return jsonify({"error": "You are not a member of this group."}), 403
+
+    remaining = (
+        GroupMember.query.filter(GroupMember.group_id == group_id, GroupMember.user_id != current_user.id)
+        .order_by(GroupMember.joined_at.asc())
+        .all()
+    )
+    was_last_admin = member.role == "admin" and get_group_admin_count(group_id) <= 1
+    promoted_user_id = None
+    group_deleted = False
+
+    try:
+        if not remaining:
+            # Last member out deletes the group entirely, including its
+            # message history — nobody's left to read it, and there's no
+            # "restore a group" flow to keep it around for.
+            group_photo = group.photo
+            db.session.delete(group)
+            db.session.commit()
+            group_deleted = True
+            if group_photo:
+                old_path = os.path.join(app.config["UPLOAD_FOLDER"], group_photo)
+                if os.path.exists(old_path):
+                    try:
+                        os.remove(old_path)
+                    except OSError:
+                        logger.warning("Could not remove group photo for deleted group: %s", group_photo)
+        else:
+            if was_last_admin:
+                successor = remaining[0]
+                successor.role = "admin"
+                promoted_user_id = successor.user_id
+            db.session.delete(member)
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to process leave-group request")
+        return jsonify({"error": "Could not leave group. Please try again."}), 500
+
+    if group_deleted:
+        # Nobody's left to notify over the group room (everyone already
+        # left it), but the leaving user's own other open tabs still need
+        # to drop the group from their sidebar.
+        socketio.emit(
+            "group_member_removed",
+            {"group_id": group_id, "user_id": current_user.id, "removed_by": current_user.id},
+            room=get_room_name(current_user.id),
+        )
+    else:
+        payload = group.to_dict()
+        socketio.emit("group_updated", payload, room=get_group_room_name(group_id))
+        socketio.emit(
+            "group_member_removed",
+            {"group_id": group_id, "user_id": current_user.id, "removed_by": current_user.id},
+            room=get_room_name(current_user.id),
+        )
+        if promoted_user_id:
+            socketio.emit(
+                "group_member_role_changed",
+                {"group_id": group_id, "user_id": promoted_user_id, "role": "admin"},
+                room=get_group_room_name(group_id),
+            )
+
+    return jsonify({"message": "Left group.", "group_deleted": group_deleted}), 200
 
 
 # -------------------------------------------------------------------
