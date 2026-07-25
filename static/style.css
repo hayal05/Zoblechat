@@ -291,6 +291,26 @@ a:focus-visible {
 .auth-switch a { font-weight: 600; text-decoration: none; }
 .auth-switch a:hover { text-decoration: underline; }
 
+.link-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-weight: 600;
+    color: var(--ink-soft);
+    cursor: pointer;
+}
+.link-btn:hover { color: var(--ink); text-decoration: underline; }
+.link-btn:disabled { color: var(--ink-faint); cursor: default; text-decoration: none; }
+
+.otp-input {
+    text-align: center;
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: 10px;
+    padding-left: 16px; /* balances the letter-spacing so the code looks centered */
+}
+
 /* ---------------------------------------------------------------------
    App shell
    --------------------------------------------------------------------- */
