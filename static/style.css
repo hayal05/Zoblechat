@@ -1489,3 +1489,126 @@ a:focus-visible {
 @media (max-width: 760px) {
     .story-viewer { max-width: 100%; }
 }
+
+/* ---------------------------------------------------------------------
+   Group messaging — Group tab, group list rows, create-group modal,
+   group chat header identity, and incoming-sender labels inside a
+   group conversation. Reuses the same avatar/chat-row/modal/msg-bubble
+   language as the rest of the app so it doesn't read as a bolted-on
+   feature.
+   --------------------------------------------------------------------- */
+
+/* Icon-based avatar used wherever there's no single photo to show
+   (group rows, the group chat header, member-picker fallback). */
+.avatar-group {
+    align-items: center;
+    justify-content: center;
+    background: var(--brand-tint);
+    color: var(--brand-dark);
+    border-color: var(--brand-tint-strong);
+}
+.avatar-group svg { flex-shrink: 0; }
+.chat-row.active .avatar-group {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px var(--brand-tint);
+}
+
+/* "New group" FAB sits in the same spot as "Find contacts" — only one
+   of the two is ever visible at a time, toggled by the active tab via
+   its `hidden` attribute (see setView() in chat.html). This must only
+   apply while the button actually has the `hidden` attribute — an
+   unconditional `display: none` here would permanently hide the
+   button even after JS clears `hidden`, which is exactly what was
+   happening: the Group tab's "+" button never appeared no matter what. */
+.fab-new-group[hidden] { display: none; }
+
+.groups-list[hidden] { display: none; }
+.group-row-meta {
+    font-size: 12px;
+    color: var(--ink-faint);
+    flex-shrink: 0;
+    margin-left: 6px;
+}
+
+/* ---------------------------------------------------------------------
+   Create-group modal — member picker
+   --------------------------------------------------------------------- */
+.group-members-label { margin-top: 18px; }
+.group-member-search { margin: 6px 0 8px; }
+.member-picker-list {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 4px;
+}
+.member-picker-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+}
+.member-picker-row:hover { background: var(--canvas); }
+.member-picker-row.selected { background: var(--brand-tint); }
+.member-picker-row .avatar { width: 34px; height: 34px; }
+.member-picker-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.member-picker-check {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2px solid var(--border-strong);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: transparent;
+    transition: background 0.15s var(--ease), border-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+.member-picker-row.selected .member-picker-check {
+    background: var(--brand);
+    border-color: var(--brand);
+    color: #fff;
+}
+.member-picker-check svg { width: 12px; height: 12px; }
+#memberPickerCount {
+    margin: 8px 0 0;
+    text-align: right;
+}
+
+/* ---------------------------------------------------------------------
+   Group chat header — badge + status read differently from a 1:1 chat
+   --------------------------------------------------------------------- */
+.chat-header-badge[data-kind="group"] {
+    background: var(--story-purple-tint);
+    color: var(--story-purple-dark);
+}
+
+/* ---------------------------------------------------------------------
+   Sender label on incoming group messages — a 1:1 conversation never
+   needs this (there's only ever one "other" person), but a group can
+   have several senders in the same thread.
+   --------------------------------------------------------------------- */
+.msg-row.incoming .group-msg-sender {
+    display: block;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--brand-dark);
+    margin: 0 0 3px 2px;
+}
+.msg-row.outgoing .group-msg-sender { display: none; }
