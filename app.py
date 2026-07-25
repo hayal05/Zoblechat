@@ -473,6 +473,8 @@ class Post(db.Model):
             "username": self.user.username,
             "full_name": self.user.full_name,
             "profile_pic": self.user.profile_pic,
+            "is_verified": bool(self.user.is_verified),
+            "is_admin": bool(self.user.is_admin),
             "text": self.text,
             "image_url": (
                 url_for("static", filename=f"uploads/post_photos/{self.image_path}")
@@ -536,6 +538,8 @@ class PostComment(db.Model):
             "username": self.author.username,
             "full_name": self.author.full_name,
             "profile_pic": self.author.profile_pic,
+            "is_verified": bool(self.author.is_verified),
+            "is_admin": bool(self.author.is_admin),
             "text": self.text,
             "created_at": to_iso_utc(self.created_at),
         }
