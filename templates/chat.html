@@ -5,6 +5,14 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
 {% endblock %}
 
+{% macro verified_badge(user) %}
+{%- if user.is_verified -%}
+<span class="verified-badge {{ 'verified-badge-admin' if user.is_admin else 'verified-badge-user' }}" title="{{ 'Admin · Verified' if user.is_admin else 'Verified' }}">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M23 12l-2.44-2.78.34-3.68-3.61-.82-1.89-3.18L12 2.96 8.6 1.54 6.71 4.72l-3.61.81.34 3.68L1 12l2.44 2.78-.34 3.69 3.61.82 1.89 3.18L12 21.04l3.4 1.42 1.89-3.18 3.61-.82-.34-3.68L23 12z" fill="currentColor"></path><path d="M10.09 16.72l-3.8-3.81 1.48-1.48 2.32 2.33 5.85-5.87 1.48 1.48-7.33 7.35z" fill="white"></path></svg>
+</span>
+{%- endif -%}
+{% endmacro %}
+
 {% block body %}
 <div class="app-shell">
 
@@ -50,7 +58,7 @@
                         <span class="avatar avatar-sm">
                             <img src="{{ url_for('static', filename='uploads/' ~ current_user_data.profile_pic) }}" alt="Your avatar">
                         </span>
-                        <span class="profile-menu-header-name" id="ownFullName">{{ current_user_data.full_name }}</span>
+                        <span class="profile-menu-header-name" id="ownFullName">{{ current_user_data.full_name }}{{ verified_badge(current_user_data) }}</span>
                     </div>
                     <div class="profile-menu-divider"></div>
                     <button class="profile-menu-item" id="openProfileBtn" type="button">
@@ -101,7 +109,7 @@
         <div class="chat-list" id="chatList">
             {% if users %}
                 {% for user in users %}
-                <button class="chat-row" data-user-id="{{ user.id }}" data-username="{{ user.username }}" data-fullname="{{ user.full_name }}" data-profile-pic="{{ user.profile_pic }}" data-last-seen="{{ user.last_seen or '' }}">
+                <button class="chat-row" data-user-id="{{ user.id }}" data-username="{{ user.username }}" data-fullname="{{ user.full_name }}" data-profile-pic="{{ user.profile_pic }}" data-last-seen="{{ user.last_seen or '' }}" data-verified="{{ 'true' if user.is_verified else 'false' }}" data-admin="{{ 'true' if user.is_admin else 'false' }}">
                     <span class="avatar" data-online="{{ 'true' if user.online else 'false' }}">
                         <img src="{{ url_for('static', filename='uploads/' ~ user.profile_pic) }}" alt="{{ user.full_name }}'s avatar">
                         <span class="presence-dot"></span>
@@ -109,9 +117,13 @@
 
                     <span class="chat-row-body">
                         <span class="chat-row-top">
-                            <span class="chat-row-name">{{ user.full_name }}</span>
+                            <span class="chat-row-name">{{ user.full_name }}{{ verified_badge(user) }}</span>
                         </span>
+                        {% if user.last_message %}
+                        <span class="chat-row-preview" data-default="Tap to open conversation">{{ "You: " if user.last_message.from_me else "" }}{{ "📷 Photo" if user.last_message.message_type == "image" else user.last_message.text }}</span>
+                        {% else %}
                         <span class="chat-row-preview" data-default="Tap to open conversation">Tap to open conversation</span>
+                        {% endif %}
                     </span>
 
                     {% if user.unread_count and user.unread_count > 0 %}
@@ -341,6 +353,44 @@
     let activeUserId = null;
     let activeUsername = null;
 
+    // ---------------------------------------------------------------
+    // Phone back-button support
+    // ---------------------------------------------------------------
+    // Every full-screen/modal layer in the app (an open conversation on
+    // mobile, the photo lightbox, the story viewer, the contacts modal,
+    // the profile modal) pushes one history entry the moment it opens.
+    // That makes the phone's hardware/gesture back button close just
+    // that layer first — the way WhatsApp/Telegram behave — instead of
+    // navigating the whole page away. Nothing here ever logs the user
+    // out or sends them to /register; logout only ever happens from the
+    // explicit "Log out" button in the profile menu.
+    const overlayStack = [];
+
+    function openOverlay(name, closeFn) {
+        overlayStack.push({ name, closeFn });
+        history.pushState({ zobleOverlay: name }, "");
+    }
+
+    // Called from any UI control that closes an overlay (an X button, a
+    // backdrop click, Escape, the on-screen back arrow, auto-advancing
+    // past the last story, etc). If that overlay owns the top history
+    // entry, history.back() consumes it, which fires the popstate
+    // handler below to run the actual close logic — so the browser's
+    // history and our overlay stack never drift out of sync regardless
+    // of *how* the overlay gets closed.
+    function closeOverlay(name) {
+        const top = overlayStack[overlayStack.length - 1];
+        if (top && top.name === name) {
+            history.back();
+        }
+    }
+
+    window.addEventListener("popstate", () => {
+        const top = overlayStack.pop();
+        if (top) top.closeFn();
+    });
+
+
     // Caches everything we know about a user (name, avatar, presence) keyed
     // by id — seeded from the server-rendered conversation list, then grown
     // as search results and presence updates come in. Lets us render a chat
@@ -360,6 +410,8 @@
             // not a placeholder. It's only ever null for an online user or
             // one who has never disconnected before.
             last_seen: row.dataset.lastSeen || null,
+            is_verified: row.dataset.verified === "true",
+            is_admin: row.dataset.admin === "true",
         };
     });
 
@@ -375,6 +427,18 @@
         const div = document.createElement("div");
         div.textContent = str;
         return div.innerHTML;
+    }
+
+    // Mirrors the `verified_badge` Jinja macro used for server-rendered
+    // rows, so client-built rows (search results, live-added chat rows,
+    // the active chat header) show the same badge.
+    function verifiedBadgeHtml(user) {
+        if (!user || !user.is_verified) return "";
+        const cls = user.is_admin ? "verified-badge-admin" : "verified-badge-user";
+        const title = user.is_admin ? "Admin · Verified" : "Verified";
+        return `<span class="verified-badge ${cls}" title="${title}">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M23 12l-2.44-2.78.34-3.68-3.61-.82-1.89-3.18L12 2.96 8.6 1.54 6.71 4.72l-3.61.81.34 3.68L1 12l2.44 2.78-.34 3.69 3.61.82 1.89 3.18L12 21.04l3.4 1.42 1.89-3.18 3.61-.82-.34-3.68L23 12z" fill="currentColor"></path><path d="M10.09 16.72l-3.8-3.81 1.48-1.48 2.32 2.33 5.85-5.87 1.48 1.48-7.33 7.35z" fill="white"></path></svg>
+        </span>`;
     }
 
     function formatTime(isoString) {
@@ -397,27 +461,204 @@
         return msg.message_type === "image" ? "📷 Photo" : msg.content;
     }
 
+    // Read receipts — renders as a single check for a sent-but-unread
+    // message, or two overlapping checks once the recipient has read it
+    // (mirrors the `is_read` flag the server already tracks). Only ever
+    // shown on messages *we* sent — there's no receipt to show on a
+    // message someone sent to us.
+    const MSG_STATUS_TICK_SVG =
+        `<svg class="msg-status-tick" viewBox="0 0 16 12" width="14" height="12" aria-hidden="true">` +
+        `<path d="M2 6.3L6 10.3L14 1.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>` +
+        `</svg>`;
+
+    function renderMessageStatus(isRead, isPhoto) {
+        const cls = "msg-status" + (isPhoto ? " msg-status-photo" : "") + (isRead ? " read" : "");
+        const ticks = isRead ? MSG_STATUS_TICK_SVG + MSG_STATUS_TICK_SVG : MSG_STATUS_TICK_SVG;
+        return `<span class="${cls}" title="${isRead ? "Read" : "Sent"}">${ticks}</span>`;
+    }
+
+    // Called when a "messages_seen" event tells us the recipient just read
+    // everything we'd sent them — flips every matching sent-tick to the
+    // double-check "read" state live, without re-fetching anything.
+    function markSentMessagesRead(recipientId) {
+        document.querySelectorAll(
+            `.msg-row.outgoing[data-recipient-id="${recipientId}"][data-read="false"]`
+        ).forEach(row => {
+            row.dataset.read = "true";
+            const statusEl = row.querySelector(".msg-status");
+            if (!statusEl) return;
+            statusEl.classList.add("read");
+            statusEl.title = "Read";
+            statusEl.innerHTML = MSG_STATUS_TICK_SVG + MSG_STATUS_TICK_SVG;
+        });
+    }
+
     function appendMessage(msg, animate) {
         const outgoing = msg.sender_id === CURRENT_USER_ID;
         const row = document.createElement("div");
         row.className = "msg-row " + (outgoing ? "outgoing" : "incoming") + (animate ? " msg-enter" : "");
+        row.dataset.messageId = msg.id;
+        if (outgoing) {
+            row.dataset.recipientId = msg.recipient_id;
+            row.dataset.read = msg.is_read ? "true" : "false";
+        }
+
+        const isPhoto = msg.message_type === "image" && msg.image_url;
+        const statusHtml = outgoing ? renderMessageStatus(!!msg.is_read, isPhoto) : "";
+
+        const bubbleHtml = isPhoto
+            ? `<div class="msg-bubble msg-bubble-photo">
+                   <img class="msg-photo" src="${msg.image_url}" alt="Shared photo" loading="lazy">
+                   <span class="msg-meta">
+                       <span class="msg-time msg-time-photo">${formatTime(msg.timestamp)}</span>
+                       ${statusHtml}
+                   </span>
+               </div>`
+            : `<div class="msg-bubble">
+                   ${escapeHtml(msg.content)}
+                   <span class="msg-meta">
+                       <span class="msg-time">${formatTime(msg.timestamp)}</span>
+                       ${statusHtml}
+                   </span>
+               </div>`;
+
+        row.innerHTML = `
+            <div class="msg-stack">
+                <div class="msg-bubble-group">
+                    <button type="button" class="msg-react-trigger" aria-label="React to this message">${REACT_TRIGGER_ICON}</button>
+                    ${bubbleHtml}
+                </div>
+                <div class="msg-reactions-bar"></div>
+            </div>`;
 
         if (msg.message_type === "image" && msg.image_url) {
-            row.innerHTML = `
-                <div class="msg-bubble msg-bubble-photo">
-                    <img class="msg-photo" src="${msg.image_url}" alt="Shared photo" loading="lazy">
-                    <span class="msg-time msg-time-photo">${formatTime(msg.timestamp)}</span>
-                </div>`;
             row.querySelector(".msg-photo").addEventListener("click", () => openLightbox(msg.image_url));
-        } else {
-            row.innerHTML = `
-                <div class="msg-bubble">
-                    ${escapeHtml(msg.content)}
-                    <span class="msg-time">${formatTime(msg.timestamp)}</span>
-                </div>`;
         }
+
         messagesScroll.appendChild(row);
+        renderMessageReactions(row, msg.reactions || []);
     }
+
+    // ---------------------------------------------------------------
+    // Message reactions — a fixed set of sticker emoji (like the story
+    // love-reaction, but per-message and with a small emoji choice rather
+    // than a single icon). One reaction per user per message: tapping your
+    // own reaction pill removes it, picking a different emoji swaps it.
+    // ---------------------------------------------------------------
+    const REACTION_EMOJIS = ["❤️", "😂", "😮", "😢", "👍", "🙏"];
+    const REACT_TRIGGER_ICON = "🙂";
+
+    function renderMessageReactions(row, reactions) {
+        const bar = row.querySelector(".msg-reactions-bar");
+        if (!reactions.length) {
+            bar.innerHTML = "";
+            bar.hidden = true;
+            return;
+        }
+        const counts = new Map();
+        let myReaction = null;
+        reactions.forEach(r => {
+            counts.set(r.emoji, (counts.get(r.emoji) || 0) + 1);
+            if (r.user_id === CURRENT_USER_ID) myReaction = r.emoji;
+        });
+        bar.hidden = false;
+        bar.innerHTML = Array.from(counts.entries()).map(([emoji, count]) => `
+            <button type="button" class="msg-reaction-pill ${emoji === myReaction ? "msg-reaction-pill-mine" : ""}" data-emoji="${emoji}">
+                <span class="msg-reaction-emoji">${emoji}</span><span class="msg-reaction-count">${count}</span>
+            </button>`).join("");
+    }
+
+    function updateMessageReactions(messageId, reactions) {
+        const row = messagesScroll.querySelector(`.msg-row[data-message-id="${messageId}"]`);
+        if (row) renderMessageReactions(row, reactions);
+    }
+
+    async function sendReaction(messageId, emoji) {
+        try {
+            const res = await fetch(`/api/messages/${messageId}/react`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ emoji }),
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+            // The server also broadcasts this over Socket.IO ("message_reacted")
+            // to both participants' rooms, including our own — but we update
+            // this tab immediately here too, so it feels instant rather than
+            // waiting on the round trip through the socket.
+            updateMessageReactions(messageId, data.reactions);
+        } catch (err) {
+            // Reactions are a light-touch feature — silently drop network
+            // failures rather than interrupting the conversation with an error.
+        }
+    }
+
+    // Emoji picker popover — a single shared element, repositioned next to
+    // whichever message's react-trigger was clicked.
+    const reactionPicker = document.createElement("div");
+    reactionPicker.className = "reaction-picker";
+    reactionPicker.hidden = true;
+    reactionPicker.innerHTML = REACTION_EMOJIS
+        .map(e => `<button type="button" class="reaction-picker-option" data-emoji="${e}">${e}</button>`)
+        .join("");
+    document.body.appendChild(reactionPicker);
+
+    let reactionPickerMessageId = null;
+
+    function openReactionPicker(triggerEl, messageId) {
+        reactionPickerMessageId = messageId;
+        reactionPicker.hidden = false;
+        const rect = triggerEl.getBoundingClientRect();
+        const pickerRect = reactionPicker.getBoundingClientRect();
+        let left = rect.left + rect.width / 2 - pickerRect.width / 2;
+        left = Math.max(8, Math.min(left, window.innerWidth - pickerRect.width - 8));
+        let top = rect.top - pickerRect.height - 8;
+        if (top < 8) top = rect.bottom + 8; // flip below if there's no room above
+        reactionPicker.style.left = `${left}px`;
+        reactionPicker.style.top = `${top}px`;
+    }
+
+    function closeReactionPicker() {
+        reactionPicker.hidden = true;
+        reactionPickerMessageId = null;
+    }
+
+    reactionPicker.addEventListener("click", (e) => {
+        const option = e.target.closest(".reaction-picker-option");
+        if (!option || reactionPickerMessageId === null) return;
+        sendReaction(reactionPickerMessageId, option.dataset.emoji);
+        closeReactionPicker();
+    });
+
+    messagesScroll.addEventListener("click", (e) => {
+        const trigger = e.target.closest(".msg-react-trigger");
+        if (trigger) {
+            const row = trigger.closest(".msg-row");
+            if (reactionPickerMessageId === row.dataset.messageId) {
+                closeReactionPicker();
+            } else {
+                openReactionPicker(trigger, row.dataset.messageId);
+            }
+            return;
+        }
+        const pill = e.target.closest(".msg-reaction-pill");
+        if (pill) {
+            const row = pill.closest(".msg-row");
+            // Tapping a pill re-sends that same emoji: if it's already your
+            // reaction this removes it (server toggle semantics), otherwise
+            // it adds/swaps to it — same as picking it from the picker.
+            sendReaction(row.dataset.messageId, pill.dataset.emoji);
+        }
+    });
+
+    document.addEventListener("click", (e) => {
+        if (!reactionPicker.hidden && !reactionPicker.contains(e.target) && !e.target.closest(".msg-react-trigger")) {
+            closeReactionPicker();
+        }
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !reactionPicker.hidden) closeReactionPicker();
+    });
 
     // ---------------------------------------------------------------
     // Photo lightbox — tap any shared photo to view it full-size
@@ -429,6 +670,7 @@
     function openLightbox(src) {
         lightboxImage.src = src;
         lightboxBackdrop.hidden = false;
+        openOverlay("lightbox", closeLightbox);
     }
 
     function closeLightbox() {
@@ -436,12 +678,12 @@
         lightboxImage.src = "";
     }
 
-    lightboxCloseBtn.addEventListener("click", closeLightbox);
+    lightboxCloseBtn.addEventListener("click", () => closeOverlay("lightbox"));
     lightboxBackdrop.addEventListener("click", (e) => {
-        if (e.target === lightboxBackdrop) closeLightbox();
+        if (e.target === lightboxBackdrop) closeOverlay("lightbox");
     });
     document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape" && !lightboxBackdrop.hidden) closeLightbox();
+        if (e.key === "Escape" && !lightboxBackdrop.hidden) closeOverlay("lightbox");
     });
 
     // ---------------------------------------------------------------
@@ -645,6 +887,8 @@
         const entry = storiesByUser[userId];
         if (!entry || !entry.stories.length) return;
 
+        const wasClosed = storyViewerBackdrop.hidden;
+
         viewingUserId = userId;
         storyViewerAvatar.src = `/static/uploads/${entry.profile_pic}`;
         storyViewerName.textContent = userId === CURRENT_USER_ID ? "Your story" : (entry.full_name || entry.username);
@@ -652,13 +896,20 @@
         buildProgressSegments(entry.stories.length);
         storyViewerBackdrop.hidden = false;
         document.addEventListener("keydown", handleStoryKeydown);
+        // Only push a history entry when the viewer is genuinely opening,
+        // not when advanceStory() hops from one person's stories to the
+        // next while the viewer stays open — otherwise a single back
+        // press wouldn't close it after browsing several people's stories.
+        if (wasClosed) {
+            openOverlay("storyViewer", closeStoryViewer);
+        }
         showStoryAt(Math.min(Math.max(startIndex || 0, 0), entry.stories.length - 1));
     }
 
     function showStoryAt(index) {
         const entry = storiesByUser[viewingUserId];
         if (!entry || index < 0 || index >= entry.stories.length) {
-            closeStoryViewer();
+            closeOverlay("storyViewer");
             return;
         }
         viewingIndex = index;
@@ -690,7 +941,7 @@
 
     function advanceStory(direction) {
         const entry = storiesByUser[viewingUserId];
-        if (!entry) { closeStoryViewer(); return; }
+        if (!entry) { closeOverlay("storyViewer"); return; }
 
         const nextIndex = viewingIndex + direction;
         if (nextIndex >= 0 && nextIndex < entry.stories.length) {
@@ -711,7 +962,7 @@
             }
             cursor += direction;
         }
-        closeStoryViewer();
+        closeOverlay("storyViewer");
     }
 
     function closeStoryViewer() {
@@ -725,14 +976,14 @@
     }
 
     function handleStoryKeydown(e) {
-        if (e.key === "Escape") closeStoryViewer();
+        if (e.key === "Escape") closeOverlay("storyViewer");
         else if (e.key === "ArrowRight") advanceStory(1);
         else if (e.key === "ArrowLeft") advanceStory(-1);
     }
 
-    storyViewerCloseBtn.addEventListener("click", closeStoryViewer);
+    storyViewerCloseBtn.addEventListener("click", () => closeOverlay("storyViewer"));
     storyViewerBackdrop.addEventListener("click", (e) => {
-        if (e.target === storyViewerBackdrop) closeStoryViewer();
+        if (e.target === storyViewerBackdrop) closeOverlay("storyViewer");
     });
     storyPrevBtn.addEventListener("click", () => advanceStory(-1));
     storyNextBtn.addEventListener("click", () => advanceStory(1));
@@ -830,6 +1081,8 @@
         row.dataset.fullname = user.full_name;
         row.dataset.profilePic = user.profile_pic;
         row.dataset.lastSeen = user.last_seen || "";
+        row.dataset.verified = user.is_verified ? "true" : "false";
+        row.dataset.admin = user.is_admin ? "true" : "false";
         row.innerHTML = `
             <span class="avatar" data-online="${user.online ? "true" : "false"}">
                 <img src="/static/uploads/${user.profile_pic}" alt="${escapeHtml(user.full_name)}'s avatar">
@@ -837,7 +1090,7 @@
             </span>
             <span class="chat-row-body">
                 <span class="chat-row-top">
-                    <span class="chat-row-name">${escapeHtml(user.full_name)}</span>
+                    <span class="chat-row-name">${escapeHtml(user.full_name)}${verifiedBadgeHtml(user)}</span>
                 </span>
                 <span class="chat-row-preview" data-default="Tap to open conversation">Tap to open conversation</span>
             </span>`;
@@ -995,7 +1248,7 @@
     // ---------------------------------------------------------------
     function applyActiveHeader(user) {
         const name = user.full_name || user.username;
-        document.getElementById("activeUsername").textContent = name;
+        document.getElementById("activeUsername").innerHTML = `${escapeHtml(name)}${verifiedBadgeHtml(user)}`;
         document.getElementById("activeAvatar").src = `/static/uploads/${user.profile_pic}`;
         setActiveStatus(!!user.online, user.last_seen || null);
         // Tab title reflects that this is a private 1:1 conversation, not a
@@ -1019,11 +1272,20 @@
 
         emptyState.hidden = true;
         activeState.hidden = false;
+        const wasClosed = !appShell.classList.contains("conversation-open");
         appShell.classList.add("conversation-open");
+        // Only push a history entry the first time the conversation view
+        // opens from the list — switching directly between chats while
+        // already inside one shouldn't make the back button require an
+        // extra press per chat switched through.
+        if (wasClosed) {
+            openOverlay("conversation", closeConversationView);
+        }
 
         messagesScroll.innerHTML = "";
         messageInput.value = "";
         messageInput.style.height = "";
+        closeReactionPicker();
 
         // Refresh presence + profile info in case it's changed since we last cached it.
         try {
@@ -1134,10 +1396,12 @@
         openConversationForId(userId);
     });
 
-    backBtn.addEventListener("click", () => {
+    function closeConversationView() {
         appShell.classList.remove("conversation-open");
         document.title = "Zoble Chat · Messages";
-    });
+    }
+
+    backBtn.addEventListener("click", () => closeOverlay("conversation"));
 
     // ---------------------------------------------------------------
     // Find contacts on Zoble — reads phone numbers from the device's
@@ -1182,6 +1446,7 @@
                 "our servers.";
         }
         contactsModalBackdrop.hidden = false;
+        openOverlay("contactsModal", closeContactsModal);
     }
 
     function closeContactsModal() {
@@ -1189,12 +1454,12 @@
     }
 
     findContactsBtn.addEventListener("click", openContactsModal);
-    closeContactsBtn.addEventListener("click", closeContactsModal);
+    closeContactsBtn.addEventListener("click", () => closeOverlay("contactsModal"));
     contactsModalBackdrop.addEventListener("click", (e) => {
-        if (e.target === contactsModalBackdrop) closeContactsModal();
+        if (e.target === contactsModalBackdrop) closeOverlay("contactsModal");
     });
     document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape" && !contactsModalBackdrop.hidden) closeContactsModal();
+        if (e.key === "Escape" && !contactsModalBackdrop.hidden) closeOverlay("contactsModal");
     });
 
     function renderContactMatches(matches, checkedCount) {
@@ -1223,7 +1488,7 @@
     contactsResultList.addEventListener("click", (e) => {
         const row = e.target.closest(".chat-row");
         if (!row) return;
-        closeContactsModal();
+        closeOverlay("contactsModal");
         openConversationForId(parseInt(row.dataset.userId, 10));
     });
 
@@ -1431,12 +1696,27 @@
         }
     });
 
+    socket.on("messages_seen", (payload) => {
+        // payload: { reader_id, count } — reader_id is the person who just
+        // read messages *we* sent them, so flip our sent-tick(s) to "read".
+        if (payload && payload.reader_id != null) {
+            markSentMessagesRead(payload.reader_id);
+        }
+    });
+
     socket.on("error", (payload) => {
         console.error("Socket error:", payload && payload.error);
     });
 
     socket.on("presence_update", (payload) => {
         updatePresenceEverywhere(payload.user_id, payload.online, payload.last_seen);
+    });
+
+    socket.on("message_reacted", (payload) => {
+        // Covers reactions made from the *other* participant, and reactions
+        // made from one of our own other open tabs — this tab's own reacts
+        // already update instantly via sendReaction()'s response.
+        updateMessageReactions(payload.message_id, payload.reactions);
     });
 
     // ---------------------------------------------------------------
@@ -1489,7 +1769,7 @@
                 buildProgressSegments(stillEntry.stories.length);
                 showStoryAt(Math.min(viewingIndex, stillEntry.stories.length - 1));
             } else {
-                closeStoryViewer();
+                closeOverlay("storyViewer");
             }
         }
         renderStoriesBar();
@@ -1528,18 +1808,19 @@
         profileFullNameInput.value = ownFullName.textContent.trim();
         profileAvatarPreview.src = ownAvatar.src;
         profileModalBackdrop.hidden = false;
+        openOverlay("profileModal", closeProfileModal);
     }
 
     function closeProfileModal() {
         profileModalBackdrop.hidden = true;
     }
 
-    closeProfileBtn.addEventListener("click", closeProfileModal);
+    closeProfileBtn.addEventListener("click", () => closeOverlay("profileModal"));
     profileModalBackdrop.addEventListener("click", (e) => {
-        if (e.target === profileModalBackdrop) closeProfileModal();
+        if (e.target === profileModalBackdrop) closeOverlay("profileModal");
     });
     document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape" && !profileModalBackdrop.hidden) closeProfileModal();
+        if (e.key === "Escape" && !profileModalBackdrop.hidden) closeOverlay("profileModal");
     });
 
     // ---------------------------------------------------------------
@@ -1642,7 +1923,7 @@
                 return;
             }
 
-            ownFullName.textContent = data.user.full_name;
+            ownFullName.innerHTML = `${escapeHtml(data.user.full_name)}${verifiedBadgeHtml(data.user)}`;
             profileSuccess.textContent = "Name updated.";
             profileSuccess.hidden = false;
             setTimeout(closeProfileModal, 700);

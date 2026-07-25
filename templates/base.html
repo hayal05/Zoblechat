@@ -8,6 +8,22 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     {% block extra_head %}{% endblock %}
+    <script>
+        // Belt-and-suspenders for the phone's hardware/gesture back button.
+        // The server already sends no-store headers so it re-checks auth on
+        // every navigation, but some mobile browsers (notably iOS Safari)
+        // can still restore a page from bfcache without re-asking the
+        // server. `event.persisted` is true exactly in that case, so we
+        // force a real reload — which re-runs the server-side auth check
+        // and guarantees a logged-in user landing back on /login or
+        // /register gets bounced straight to the chat instead of seeing a
+        // stale "logged out" snapshot.
+        window.addEventListener("pageshow", (event) => {
+            if (event.persisted) {
+                window.location.reload();
+            }
+        });
+    </script>
 </head>
 <body>
     {% block body %}{% endblock %}
