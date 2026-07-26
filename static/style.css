@@ -723,6 +723,100 @@ a:focus-visible {
 }
 
 /* ---------------------------------------------------------------------
+   Notifications — bell icon + live badge next to the news feed icon,
+   opening a dropdown panel styled the same way as .profile-menu above
+   (same popover shadow/radius/animation), just anchored under the bell
+   instead of the avatar and wider to fit a list of activity rows.
+   --------------------------------------------------------------------- */
+.notif-wrap { position: relative; flex-shrink: 0; }
+
+.notif-panel {
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 340px;
+    max-width: calc(100vw - 24px);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-plate-lg);
+    z-index: 20;
+    animation: profile-menu-in 0.15s var(--ease);
+    display: flex;
+    flex-direction: column;
+    max-height: min(480px, 70vh);
+    overflow: hidden;
+}
+.notif-panel[hidden] { display: none; }
+
+.notif-panel-header {
+    padding: 12px 14px;
+    font-weight: 700;
+    font-size: 14.5px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.notif-panel-list {
+    overflow-y: auto;
+    flex: 1;
+}
+
+.notif-panel-empty {
+    padding: 28px 16px;
+    text-align: center;
+    color: var(--ink-faint);
+    font-size: 13.5px;
+}
+
+.notif-row {
+    width: 100%;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 14px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s var(--ease);
+}
+.notif-row:last-child { border-bottom: none; }
+.notif-row:hover { background: var(--canvas); }
+/* Unread rows get a soft brand tint plus a small dot, same idea as the
+   unread-badge treatment elsewhere rather than a second competing color. */
+.notif-row.unread { background: var(--brand-tint); }
+.notif-row.unread:hover { background: var(--brand-tint); filter: brightness(0.97); }
+
+.notif-row-dot {
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    margin-top: 6px;
+    border-radius: var(--radius-full);
+    background: var(--brand);
+}
+.notif-row:not(.unread) .notif-row-dot { visibility: hidden; }
+
+.notif-row-body {
+    flex: 1;
+    min-width: 0;
+}
+.notif-row-text {
+    font-size: 13.5px;
+    line-height: 1.4;
+    color: var(--ink);
+}
+.notif-row-text strong { font-weight: 700; }
+.notif-row-time {
+    font-size: 11.5px;
+    color: var(--ink-faint);
+    margin-top: 2px;
+}
+
+/* ---------------------------------------------------------------------
    Chat pane
    --------------------------------------------------------------------- */
 .chat-pane {
