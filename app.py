@@ -14,12 +14,15 @@ eventlet.monkey_patch()
 
 import os
 import re
+import time
 import uuid
 import json
+import hashlib
 import secrets
 import logging
 import urllib.request
 import urllib.error
+import requests
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -40,7 +43,7 @@ def to_iso_utc(dt):
     return dt.isoformat() + "Z" if dt else None
 
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, redirect, url_for, render_template, make_response
+from flask import Flask, request, jsonify, redirect, url_for, render_template, make_response, send_from_directory, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import (
     LoginManager, UserMixin, login_user, logout_user,
@@ -160,6 +163,23 @@ BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
 BREVO_FROM_EMAIL = os.environ.get("BREVO_FROM_EMAIL")
 BREVO_FROM_NAME = os.environ.get("BREVO_FROM_NAME", "Zoble Chat")
 BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
+
+# -------------------------------------------------------------------
+# Uploaded image resilience (profile pics, chat/story/post photos, group photos)
+# -------------------------------------------------------------------
+# Render's free-tier filesystem is wiped on every redeploy/restart, so any
+# file saved to static/uploads/ can vanish while the database row that
+# references it (which now lives in a persistent Postgres DB) survives.
+# When all three of these are set, every upload is also mirrored to
+# Cloudinary (https://cloudinary.com, permanent free tier — 25GB), and
+# uploaded_file() below transparently redirects to the Cloudinary copy
+# whenever the local file is missing. Local disk stays the primary,
+# fast path; Cloudinary is purely a fallback, so leaving these unset just
+# means uploads behave exactly as before (and don't survive a redeploy).
+CLOUDINARY_CLOUD_NAME = os.environ.get("CLOUDINARY_CLOUD_NAME")
+CLOUDINARY_API_KEY = os.environ.get("CLOUDINARY_API_KEY")
+CLOUDINARY_API_SECRET = os.environ.get("CLOUDINARY_API_SECRET")
+CLOUDINARY_CONFIGURED = bool(CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET)
 
 # -------------------------------------------------------------------
 # App Configuration
@@ -1055,6 +1075,121 @@ def verify_is_real_image(filepath):
         return False
 
 
+def _cloudinary_signature(params):
+    """Cloudinary's signing scheme: sort params by key, join as
+    'key=value&key=value...', append the API secret, then SHA-1 the whole
+    string. https://cloudinary.com/documentation/authentication_signatures
+    """
+    to_sign = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+    return hashlib.sha1((to_sign + CLOUDINARY_API_SECRET).encode("utf-8")).hexdigest()
+
+
+def cloudinary_public_id_for(relative_path):
+    """Maps a path under static/uploads/ (e.g. 'chat_photos/12_abcd.jpg',
+    or just 'abcd.png' for profile pics) to the Cloudinary public_id used
+    to mirror it. Cloudinary tracks the file extension separately as
+    'format' rather than as part of the public_id, so it's stripped here
+    — and re-appended when reconstructing the delivery URL in
+    uploaded_file() below.
+
+    Deliberately deterministic and reversible from nothing but the
+    filename already stored in the database, so there's no need for a
+    separate column to remember each file's Cloudinary URL — any code
+    that already has the stored filename can find the mirror.
+    """
+    root, _ext = os.path.splitext(relative_path)
+    return f"zoble/{root}"
+
+
+def cloudinary_mirror_upload(local_filepath, relative_path):
+    """Best-effort mirror of a just-saved local upload to Cloudinary, keyed
+    so uploaded_file() can reconstruct its URL later purely from
+    relative_path (the path under static/uploads/, e.g.
+    'chat_photos/12_abcd.jpg').
+
+    Failures are logged, not raised: Cloudinary is a resilience fallback
+    for after a redeploy wipes local disk, not the primary write path, so
+    a hiccup here should never block the user's upload from succeeding.
+    """
+    if not CLOUDINARY_CONFIGURED:
+        return
+    public_id = cloudinary_public_id_for(relative_path)
+    timestamp = int(time.time())
+    signature = _cloudinary_signature({"public_id": public_id, "timestamp": timestamp})
+    try:
+        with open(local_filepath, "rb") as f:
+            resp = requests.post(
+                f"https://api.cloudinary.com/v1_1/{CLOUDINARY_CLOUD_NAME}/image/upload",
+                data={
+                    "api_key": CLOUDINARY_API_KEY,
+                    "timestamp": timestamp,
+                    "public_id": public_id,
+                    "signature": signature,
+                },
+                files={"file": f},
+                timeout=15,
+            )
+        resp.raise_for_status()
+    except requests.RequestException:
+        logger.exception("Cloudinary mirror upload failed for %s", relative_path)
+
+
+def cloudinary_mirror_delete(relative_path):
+    """Best-effort cleanup of a mirrored file on Cloudinary, called
+    alongside the app's existing local os.remove() calls when a photo is
+    replaced or deleted (e.g. changing your profile picture). Never
+    raises — an orphaned Cloudinary file just wastes a little of the free
+    storage quota, which isn't worth failing the user's request over.
+    """
+    if not CLOUDINARY_CONFIGURED:
+        return
+    public_id = cloudinary_public_id_for(relative_path)
+    timestamp = int(time.time())
+    signature = _cloudinary_signature({"public_id": public_id, "timestamp": timestamp})
+    try:
+        requests.post(
+            f"https://api.cloudinary.com/v1_1/{CLOUDINARY_CLOUD_NAME}/image/destroy",
+            data={
+                "api_key": CLOUDINARY_API_KEY,
+                "timestamp": timestamp,
+                "public_id": public_id,
+                "signature": signature,
+            },
+            timeout=15,
+        )
+    except requests.RequestException:
+        logger.exception("Cloudinary mirror delete failed for %s", relative_path)
+
+
+@app.route("/static/uploads/<path:filename>")
+def uploaded_file(filename):
+    """Serves an uploaded file from local disk, falling back to its
+    Cloudinary mirror when the local copy is missing.
+
+    Render's free-tier filesystem is wiped on every redeploy/restart, so a
+    file uploaded before the most recent deploy can vanish from disk even
+    though the database row referencing it (User.profile_pic,
+    Message/Story/Post/GroupMessage.image_path, Group.photo) survives in
+    Postgres. Rather than 404ing in that case, redirect to the copy
+    cloudinary_mirror_upload() saved at upload time. This intentionally
+    shares its URL prefix with, and takes priority over, Flask's default
+    static file route (see uploaded_file's more specific rule vs. the
+    built-in '/static/<path:filename>') — every existing template and
+    client-side script that builds an image URL as '/static/uploads/...'
+    keeps working unchanged either way.
+    """
+    local_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+    if os.path.isfile(local_path):
+        return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
+
+    if CLOUDINARY_CONFIGURED:
+        public_id = cloudinary_public_id_for(filename)
+        ext = (os.path.splitext(filename)[1].lstrip(".") or "jpg").lower()
+        return redirect(f"https://res.cloudinary.com/{CLOUDINARY_CLOUD_NAME}/image/upload/{public_id}.{ext}")
+
+    abort(404)
+
+
 def get_room_name(user_id):
     """Each user gets a private room named after their user ID, so we can
     target them directly regardless of which browser tab/device they're on."""
@@ -1125,6 +1260,7 @@ def purge_expired_stories():
                 os.remove(path)
         except OSError:
             logger.warning("Could not remove expired story image: %s", story.image_path)
+        cloudinary_mirror_delete(f"story_photos/{story.image_path}")
         db.session.delete(story)
 
     try:
@@ -1886,6 +2022,8 @@ def update_profile_picture():
         logger.exception("Failed to update profile picture in DB")
         return jsonify({"error": "Could not update profile picture. Please try again."}), 500
 
+    cloudinary_mirror_upload(filepath, unique_name)
+
     # Clean up the old file, but never delete the shared default avatar.
     if old_pic and old_pic != "default.png":
         old_path = os.path.join(app.config["UPLOAD_FOLDER"], old_pic)
@@ -1894,6 +2032,7 @@ def update_profile_picture():
                 os.remove(old_path)
             except OSError:
                 logger.warning("Could not remove old profile picture: %s", old_pic)
+        cloudinary_mirror_delete(old_pic)
 
     # Same reasoning as the full_name broadcast in update_profile() above —
     # one account, one photo, shown consistently everywhere it's referenced
@@ -1977,6 +2116,8 @@ def send_photo_message(recipient_id):
             pass
         logger.exception("Failed to save photo message")
         return jsonify({"error": "Could not send photo. Please try again."}), 500
+
+    cloudinary_mirror_upload(filepath, f"chat_photos/{unique_name}")
 
     payload = message.to_dict()
     payload["sender_username"] = current_user.username
@@ -2238,6 +2379,8 @@ def send_group_photo_message(group_id):
         logger.exception("Failed to save group photo message")
         return jsonify({"error": "Could not send photo. Please try again."}), 500
 
+    cloudinary_mirror_upload(filepath, f"chat_photos/{unique_name}")
+
     payload = message.to_dict()
     socketio.emit("new_group_message", payload, room=get_group_room_name(group_id))
 
@@ -2345,6 +2488,8 @@ def update_group_photo(group_id):
         logger.exception("Failed to update group photo in DB")
         return jsonify({"error": "Could not update group photo. Please try again."}), 500
 
+    cloudinary_mirror_upload(filepath, unique_name)
+
     if old_photo:
         old_path = os.path.join(app.config["UPLOAD_FOLDER"], old_photo)
         if os.path.exists(old_path):
@@ -2352,6 +2497,7 @@ def update_group_photo(group_id):
                 os.remove(old_path)
             except OSError:
                 logger.warning("Could not remove old group photo: %s", old_photo)
+        cloudinary_mirror_delete(old_photo)
 
     payload = group.to_dict(viewer_id=current_user.id)
     socketio.emit("group_updated", payload, room=get_group_room_name(group_id))
@@ -2392,6 +2538,7 @@ def remove_group_photo(group_id):
             os.remove(old_path)
         except OSError:
             logger.warning("Could not remove old group photo: %s", old_photo)
+    cloudinary_mirror_delete(old_photo)
 
     payload = group.to_dict(viewer_id=current_user.id)
     socketio.emit("group_updated", payload, room=get_group_room_name(group_id))
@@ -2604,6 +2751,7 @@ def leave_group(group_id):
                         os.remove(old_path)
                     except OSError:
                         logger.warning("Could not remove group photo for deleted group: %s", group_photo)
+                cloudinary_mirror_delete(group_photo)
         else:
             if was_last_admin:
                 successor = remaining[0]
@@ -2759,6 +2907,8 @@ def post_story():
         logger.exception("Failed to save story")
         return jsonify({"error": "Could not post story. Please try again."}), 500
 
+    cloudinary_mirror_upload(filepath, f"story_photos/{unique_name}")
+
     payload = story.to_dict(viewer_id=current_user.id)
     payload["username"] = current_user.username
     payload["full_name"] = current_user.full_name
@@ -2797,6 +2947,7 @@ def delete_story(story_id):
             os.remove(filepath)
     except OSError:
         logger.warning("Could not remove deleted story image: %s", story.image_path)
+    cloudinary_mirror_delete(f"story_photos/{story.image_path}")
 
     for partner_id in get_conversation_partner_ids(current_user.id):
         socketio.emit(
@@ -2994,6 +3145,9 @@ def create_post():
         logger.exception("Failed to save post")
         return jsonify({"error": "Could not create post. Please try again."}), 500
 
+    if unique_name:
+        cloudinary_mirror_upload(os.path.join(POST_PHOTOS_FOLDER, unique_name), f"post_photos/{unique_name}")
+
     payload = post.to_dict(viewer_id=current_user.id)
     # Broadcast to every connected client — the feed is public, unlike
     # stories which only fan out to conversation partners.
@@ -3028,6 +3182,7 @@ def delete_post(post_id):
                 os.remove(filepath)
         except OSError:
             logger.warning("Could not remove deleted post image: %s", image_path)
+        cloudinary_mirror_delete(f"post_photos/{image_path}")
 
     socketio.emit("post_deleted", {"post_id": post_id})
 
