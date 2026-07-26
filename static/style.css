@@ -1901,6 +1901,38 @@ span.feed-card-name.feed-card-account-trigger:hover { text-decoration: underline
     color: var(--brand-dark);
 }
 .feed-like-btn.feed-liked svg { fill: var(--brand); stroke: var(--brand); }
+.feed-repost-btn.feed-reposted {
+    background: var(--brand-tint);
+    border-color: var(--brand);
+    color: var(--brand-dark);
+}
+
+/* ---- Reposts: a small "X reposted" banner, an optional quote, and the
+   original post's own header/media nested in a lightly-bordered box so
+   it still reads as a distinct, separately-authored post. ---- */
+.feed-repost-banner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 16px 0;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--ink-soft);
+}
+.feed-repost-banner svg { flex-shrink: 0; }
+.feed-repost-banner .feed-card-account-trigger:hover { text-decoration: underline; cursor: pointer; }
+.feed-repost-quote {
+    padding-top: 10px !important;
+}
+.feed-repost-original {
+    margin: 10px 12px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+.feed-repost-original .feed-card-header { padding: 12px 14px 8px; }
+.feed-repost-original .feed-card-text { padding: 0 14px 10px; }
+.feed-repost-original .feed-card-media img { max-height: 400px; }
 
 .feed-empty {
     width: 100%;
