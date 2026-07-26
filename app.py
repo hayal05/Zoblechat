@@ -988,6 +988,12 @@ def send_otp_email(to_email, code, full_name):
         headers={
             "Authorization": f"Bearer {RESEND_API_KEY}",
             "Content-Type": "application/json",
+            # Cloudflare sits in front of api.resend.com and blocks requests
+            # carrying urllib's default "Python-urllib/x.y" User-Agent as a
+            # bot signature (surfaces as a 403 with Cloudflare error 1010).
+            # Any non-default UA avoids this.
+            "User-Agent": "zoble-chat/1.0 (+https://zoble-chat.onrender.com)",
+            "Accept": "application/json",
         },
     )
 
