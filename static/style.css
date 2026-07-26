@@ -1809,11 +1809,25 @@ a:focus-visible {
 .feed-card-account-trigger { cursor: pointer; }
 span.feed-card-name.feed-card-account-trigger:hover { text-decoration: underline; }
 
-/* ---- Account page modal (opened from the news feed) ---- */
-.account-modal-card {
+/* ---- Account page (opened from the news feed) — full-screen, not a
+   small centered popup. Exited via the phone/browser back button (see
+   the overlayStack / popstate handling in chat.html), so there's no
+   close (X) button in its header, on purpose. ---- */
+#accountModalBackdrop {
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 0;
+    background: var(--canvas);
+}
+.account-modal-card.modal-card-lg {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    border-radius: 0;
+    box-shadow: none;
     display: flex;
     flex-direction: column;
-    max-height: 82vh;
 }
 .account-modal-posts-scroll {
     flex: 1;
