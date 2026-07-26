@@ -251,7 +251,7 @@
     <!-- ============ ACCOUNT PAGE MODAL (opened by tapping a name/avatar
          in the news feed) ============ -->
     <div class="modal-backdrop" id="accountModalBackdrop" hidden>
-        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="accountModalName">
+        <div class="modal-card modal-card-lg account-modal-card" role="dialog" aria-modal="true" aria-labelledby="accountModalName">
             <div class="modal-header">
                 <h2>Account</h2>
                 <button class="btn-icon" id="closeAccountBtn" title="Close" type="button">
@@ -284,6 +284,15 @@
                     </button>
                     <button class="btn btn-primary account-follow-btn" id="accountFollowBtn" type="button">Follow</button>
                 </div>
+            </div>
+
+            <!-- Scrolls independently of the header above — every post this
+                 account has shared (their own posts + their reposts),
+                 newest first, loaded a page at a time as you scroll down. -->
+            <div class="account-modal-posts-scroll" id="accountModalPostsScroll">
+                <div class="account-modal-posts-heading">Posts</div>
+                <div class="account-modal-posts" id="accountModalPosts"></div>
+                <p class="account-modal-posts-empty" id="accountModalPostsEmpty" hidden>No posts yet.</p>
             </div>
         </div>
     </div>
@@ -565,10 +574,6 @@
          that extends the chat pane, scrollable like Facebook) ============ -->
     <div class="feed-backdrop" id="feedBackdrop" hidden>
         <div class="feed-viewer" id="feedViewer">
-            <header class="feed-header">
-                <span class="feed-header-hint">Swipe right to close</span>
-            </header>
-
             <!-- Vertical scroll list — native scroll up/down, just like a
                  normal Facebook-style feed. loadFeedPage() extends it as
                  the user nears the bottom. -->
@@ -1792,7 +1797,9 @@
     });
 
     // ---- Like / comment / share / delete (event delegation) ----
-    feedTrack.addEventListener("click", async (e) => {
+    // Shared by the main feed track and an account page's post list — both
+    // hold the same kind of .feed-card markup, so one handler covers either.
+    async function handleFeedCardClick(e) {
         const card = e.target.closest(".feed-card");
         if (!card) return;
         const postId = parseInt(card.dataset.postId, 10);
@@ -1846,23 +1853,34 @@
             if (!confirm("Delete this post?")) return;
             try {
                 const res = await fetch(`/api/posts/${postId}`, { method: "DELETE" });
-                if (res.ok) removePostFromFeed(postId);
+                if (res.ok) removePostEverywhere(postId);
             } catch (err) { /* ignore */ }
         }
-    });
+    }
+    feedTrack.addEventListener("click", handleFeedCardClick);
 
     // A given underlying post can be visible in more than one card at once
-    // (the original, plus anyone's repost of it), so these update every
-    // card currently showing that post rather than just one.
+    // (the original, plus anyone's repost of it — and now also its own
+    // account page, if one happens to be open), so these update every card
+    // currently showing that post rather than just one, wherever on the
+    // page it's sitting.
     function forEachCardShowing(targetId, fn) {
-        feedTrack.querySelectorAll(`.feed-card[data-target-id="${targetId}"]`).forEach(fn);
+        document.querySelectorAll(`.feed-card[data-target-id="${targetId}"]`).forEach(fn);
+    }
+
+    // Same post can be tracked in the main feed's in-memory list and/or an
+    // open account page's list at the same time — keep both in sync.
+    function forEachTrackedPost(targetId, fn) {
+        [feedPosts, accountPagePosts].forEach((list) => {
+            list.forEach((p) => {
+                const t = p.repost_of_id && p.repost_of ? p.repost_of : p;
+                if (t.id === targetId) fn(t);
+            });
+        });
     }
 
     function applyLikeState(targetId, liked, likeCount) {
-        feedPosts.forEach((p) => {
-            const t = p.repost_of_id && p.repost_of ? p.repost_of : p;
-            if (t.id === targetId) { t.liked_by_me = liked; t.like_count = likeCount; }
-        });
+        forEachTrackedPost(targetId, (t) => { t.liked_by_me = liked; t.like_count = likeCount; });
         forEachCardShowing(targetId, (card) => {
             const btn = card.querySelector(".feed-like-btn");
             if (!btn) return;
@@ -1874,10 +1892,7 @@
     // Updates the repost count only — safe to apply from a broadcast, since
     // the count is the same for everyone watching the feed.
     function updateRepostCount(targetId, repostCount) {
-        feedPosts.forEach((p) => {
-            const t = p.repost_of_id && p.repost_of ? p.repost_of : p;
-            if (t.id === targetId) t.repost_count = repostCount;
-        });
+        forEachTrackedPost(targetId, (t) => { t.repost_count = repostCount; });
         forEachCardShowing(targetId, (card) => {
             const el = card.querySelector(".feed-repost-count");
             if (el) el.textContent = repostCount;
@@ -1889,10 +1904,7 @@
     // (the direct fetch response), never from a broadcast meant for
     // everyone, since whether *you* reposted something is personal.
     function applyRepostState(targetId, reposted, repostCount) {
-        feedPosts.forEach((p) => {
-            const t = p.repost_of_id && p.repost_of ? p.repost_of : p;
-            if (t.id === targetId) { t.reposted_by_me = reposted; t.repost_count = repostCount; }
-        });
+        forEachTrackedPost(targetId, (t) => { t.reposted_by_me = reposted; t.repost_count = repostCount; });
         forEachCardShowing(targetId, (card) => {
             const btn = card.querySelector(".feed-repost-btn");
             if (!btn) return;
@@ -1923,10 +1935,7 @@
             const res = await fetch(`/api/posts/${targetId}/share`, { method: "POST" });
             if (res.ok) {
                 const data = await res.json();
-                feedPosts.forEach((p) => {
-                    const t = p.repost_of_id && p.repost_of ? p.repost_of : p;
-                    if (t.id === targetId) t.share_count = data.share_count;
-                });
+                forEachTrackedPost(targetId, (t) => { t.share_count = data.share_count; });
                 forEachCardShowing(targetId, (c) => {
                     const countEl = c.querySelector(".feed-share-count");
                     if (countEl) countEl.textContent = data.share_count;
@@ -1935,11 +1944,12 @@
         } catch (err) { /* ignore */ }
     }
 
-    function removePostFromFeed(postId) {
+    function removePostEverywhere(postId) {
         feedPosts = feedPosts.filter((p) => p.id !== postId);
-        const card = feedTrack.querySelector(`.feed-card[data-post-id="${postId}"]`);
-        if (card) card.remove();
+        accountPagePosts = accountPagePosts.filter((p) => p.id !== postId);
+        document.querySelectorAll(`.feed-card[data-post-id="${postId}"]`).forEach((el) => el.remove());
         renderFeedEmptyState();
+        renderAccountPagePostsEmptyState();
     }
 
     function addPostToFeedFront(post) {
@@ -1998,11 +2008,8 @@
     }
 
     function bumpCommentCount(postId, count) {
-        feedPosts.forEach((p) => {
-            const t = p.repost_of_id && p.repost_of ? p.repost_of : p;
-            if (t.id === postId) t.comment_count = count;
-        });
-        feedTrack.querySelectorAll(`.feed-card[data-target-id="${postId}"] .feed-comment-count`)
+        forEachTrackedPost(postId, (t) => { t.comment_count = count; });
+        document.querySelectorAll(`.feed-card[data-target-id="${postId}"] .feed-comment-count`)
             .forEach((el) => { el.textContent = count; });
     }
 
@@ -4315,7 +4322,8 @@
 
     // ---------------------------------------------------------------
     // Account page — opened by tapping a name/avatar in the news feed.
-    // Shows that person's basic profile plus Chat and Follow buttons.
+    // Shows that person's basic profile, Chat/Follow buttons, and (like a
+    // Facebook profile) every post they've shared, paged in as you scroll.
     // ---------------------------------------------------------------
     const accountModalBackdrop = document.getElementById("accountModalBackdrop");
     const closeAccountBtn = document.getElementById("closeAccountBtn");
@@ -4326,8 +4334,66 @@
     const accountFollowingCount = document.getElementById("accountFollowingCount");
     const accountChatBtn = document.getElementById("accountChatBtn");
     const accountFollowBtn = document.getElementById("accountFollowBtn");
+    const accountModalPostsScroll = document.getElementById("accountModalPostsScroll");
+    const accountModalPosts = document.getElementById("accountModalPosts");
+    const accountModalPostsEmpty = document.getElementById("accountModalPostsEmpty");
 
     let accountModalUserId = null;
+    let accountPagePosts = [];
+    let accountPageHasMore = true;
+    let accountPageLoadingMore = false;
+    let accountPageScrollDebounce = null;
+
+    function renderAccountPagePostsEmptyState() {
+        accountModalPostsEmpty.hidden = accountPagePosts.length > 0 || accountPageLoadingMore;
+    }
+
+    // Same cursor-pagination pattern as loadFeedPage, just scoped to one
+    // account's posts (own posts + their reposts) instead of everyone's.
+    async function loadAccountPagePosts(userId, reset) {
+        if (accountPageLoadingMore) return;
+        if (!reset && !accountPageHasMore) return;
+        accountPageLoadingMore = true;
+
+        if (reset) {
+            accountPagePosts = [];
+            accountModalPosts.innerHTML = "";
+            accountPageHasMore = true;
+        }
+        renderAccountPagePostsEmptyState();
+
+        try {
+            const lastId = accountPagePosts.length ? accountPagePosts[accountPagePosts.length - 1].id : "";
+            const url = lastId
+                ? `/api/users/${userId}/posts?before_id=${lastId}`
+                : `/api/users/${userId}/posts`;
+            const res = await fetch(url);
+            if (!res.ok) return;
+            const data = await res.json();
+            if (accountModalUserId !== userId) return; // switched accounts before this resolved
+            accountPageHasMore = !!data.has_more;
+            (data.posts || []).forEach((post) => {
+                accountPagePosts.push(post);
+                accountModalPosts.appendChild(buildFeedCard(post));
+            });
+        } catch (err) {
+            // Account page sits on top of core chat — fail quietly, same as the main feed.
+        } finally {
+            accountPageLoadingMore = false;
+            renderAccountPagePostsEmptyState();
+        }
+    }
+
+    accountModalPostsScroll.addEventListener("scroll", () => {
+        clearTimeout(accountPageScrollDebounce);
+        accountPageScrollDebounce = setTimeout(() => {
+            if (accountModalPostsScroll.scrollTop + accountModalPostsScroll.clientHeight * 1.5 >= accountModalPostsScroll.scrollHeight) {
+                loadAccountPagePosts(accountModalUserId, false);
+            }
+        }, 120);
+    });
+
+    accountModalPosts.addEventListener("click", handleFeedCardClick);
 
     function renderFollowBtn(isFollowing) {
         accountFollowBtn.textContent = isFollowing ? "Following" : "Follow";
@@ -4338,6 +4404,12 @@
     async function openAccountModal(userId) {
         if (!userId) return;
         accountModalUserId = userId;
+
+        // Kick off this account's post list right away — loadAccountPagePosts
+        // resets accountPagePosts/DOM synchronously before its first await,
+        // so it's safe to fire-and-forget here without blocking the rest
+        // of the modal from opening.
+        loadAccountPagePosts(userId, true);
 
         // Show whatever we already know instantly (from knownUsers / the
         // feed post itself), then refresh with the real counts + follow
@@ -4376,6 +4448,9 @@
     function closeAccountModal() {
         accountModalBackdrop.hidden = true;
         accountModalUserId = null;
+        accountPagePosts = [];
+        accountPageHasMore = true;
+        accountModalPosts.innerHTML = "";
     }
 
     closeAccountBtn.addEventListener("click", () => closeOverlay("accountModal"));
