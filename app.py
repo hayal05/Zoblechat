@@ -1504,7 +1504,60 @@ def cloudinary_status():
     return jsonify(status), 200
 
 
-@app.route("/static/uploads/<path:filename>")
+@app.route("/api/debug/db-status", methods=["GET"])
+@login_required
+def db_status():
+    """Admin-only live health check for where the database actually lives.
+
+    This is the other half of the "photos revert to default" failure mode:
+    Cloudinary being configured and working (see /api/debug/cloudinary-status)
+    only saves the image *bytes*. The filename that points at them
+    (User.profile_pic, Post/Message/Story.image_path, etc.) lives in this
+    app's own database — and if DATABASE_URL isn't set, that database is a
+    SQLite file sitting on the same ephemeral disk as the uploads folder.
+    Render (and most free-tier hosts) wipe that disk on every redeploy and
+    on every restart after the app has been idle, which deletes the rows
+    referencing those images right along with it — even though the actual
+    files are still sitting safely in Cloudinary, nothing in the (fresh,
+    empty) database points at them anymore. From the user's side this
+    looks exactly like "my photo turned back into the default avatar" or
+    "my post's photo disappeared", with no error anywhere, because nothing
+    actually failed — the row just isn't there to look at.
+
+    Fix: set DATABASE_URL to a persistent Postgres connection string (see
+    env.example) so accounts/posts/messages — and the photo filenames they
+    reference — survive restarts the same way the Cloudinary-mirrored
+    files already do.
+    """
+    if not current_user.is_admin:
+        return jsonify({"error": "Admin access required."}), 403
+
+    uri = app.config["SQLALCHEMY_DATABASE_URI"]
+    is_sqlite = uri.startswith("sqlite:")
+
+    status = {
+        "database_url_env_var_set": bool(os.environ.get("DATABASE_URL")),
+        "engine": db.engine.dialect.name,
+        "using_ephemeral_sqlite": is_sqlite,
+        "warning": (
+            "Using local SQLite with no DATABASE_URL set — every account, post, "
+            "message, and photo filename will be WIPED the next time this app "
+            "restarts or redeploys (Render's free-tier disk is ephemeral). "
+            "Cloudinary keeps the actual image files safe, but the database "
+            "rows pointing at them will be gone, which is exactly what makes "
+            "photos look like they've reverted to the default. Set DATABASE_URL "
+            "to a persistent Postgres connection string (e.g. from Neon — see "
+            "env.example) to fix this."
+        ) if is_sqlite else None,
+    }
+
+    try:
+        status["user_count"] = User.query.count()
+        status["post_count"] = Post.query.count()
+    except Exception as e:
+        status["query_error"] = str(e)
+
+    return jsonify(status), 200
 def uploaded_file(filename):
     """Serves an uploaded file from local disk, falling back to its
     Cloudinary mirror when the local copy is missing.
