@@ -55,6 +55,13 @@
 
 html, body {
     height: 100%;
+    /* Backstop for the per-element overscroll-behavior-y: contain already
+       set on .feed-backdrop/.feed-track (and any other full-screen
+       overlay): if a browser ever lets an overscroll bubble past those,
+       this stops it from reaching the document itself and triggering a
+       native pull-to-refresh, which would silently reload the whole page
+       and exit whatever overlay was open. */
+    overscroll-behavior-y: contain;
 }
 
 body {
@@ -1725,6 +1732,12 @@ a:focus-visible {
     background: var(--canvas);
     padding: 0;
     animation: modal-fade-in 0.15s var(--ease) both;
+    /* Without this, scrolling to the top of the feed and continuing to
+       pull down hands the gesture off to the browser's native
+       pull-to-refresh, which reloads the whole page and — since the feed
+       is just a JS-toggled overlay, not its own route — silently closes
+       it. Containing the scroll here stops that hand-off. */
+    overscroll-behavior-y: contain;
 }
 .feed-backdrop[hidden] { display: none; }
 
@@ -1736,21 +1749,6 @@ a:focus-visible {
     position: relative;
     background: var(--canvas);
 }
-
-/* Header plate — same treatment as the chat header, so the feed reads
-   as a natural extension of the chat page rather than a separate modal. */
-.feed-header {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    padding: 8px 20px;
-    flex-shrink: 0;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    color: var(--ink);
-    z-index: 3;
-}
-.feed-header-hint { font-size: 12px; font-weight: 600; color: var(--ink-faint); }
 
 /* Vertical, scrollable post list — scrolls up and down natively, no
    snapping, no swipe gestures: just a normal feed you scroll through. */
@@ -1765,6 +1763,10 @@ a:focus-visible {
     align-items: center;
     gap: 14px;
     padding: 16px 16px calc(96px + env(safe-area-inset-bottom, 0px));
+    /* Same reason as .feed-backdrop above — this is the element that
+       actually scrolls, so this is the one Chrome checks before
+       triggering pull-to-refresh. */
+    overscroll-behavior-y: contain;
 }
 
 /* Each post is its own white plate card sitting on the feed's canvas
@@ -1808,6 +1810,42 @@ a:focus-visible {
 span.feed-card-name.feed-card-account-trigger:hover { text-decoration: underline; }
 
 /* ---- Account page modal (opened from the news feed) ---- */
+.account-modal-card {
+    display: flex;
+    flex-direction: column;
+    max-height: 82vh;
+}
+.account-modal-posts-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    border-top: 1px solid var(--border);
+    background: var(--canvas);
+    padding: 14px 16px calc(20px + env(safe-area-inset-bottom, 0px));
+}
+.account-modal-posts-heading {
+    font-size: 12.5px;
+    font-weight: 800;
+    color: var(--ink-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 2px 0 12px;
+}
+.account-modal-posts {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+.account-modal-posts-empty {
+    text-align: center;
+    font-size: 14px;
+    color: var(--ink-faint);
+    margin: 24px 0;
+}
 .account-modal-body { align-items: center; }
 .account-modal-head {
     display: flex;
