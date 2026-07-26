@@ -120,7 +120,8 @@ STORY_CLEANUP_INTERVAL_SECONDS = 15 * 60
 # active stories.
 MAX_ACTIVE_STORIES_PER_USER = 20
 # Feed posts: text and/or photo, permanent (unlike stories), with likes,
-# comments, and a share counter.
+# comments, a share counter, and reposts (a repost is itself a Post row
+# with repost_of_id set, optionally carrying its own quote text).
 POST_TEXT_MAX_LENGTH = 2000
 POST_COMMENT_MAX_LENGTH = 500
 POST_FEED_PAGE_SIZE = 10
@@ -555,16 +556,33 @@ class Post(db.Model):
     # convention as Story.image_path.
     image_path = db.Column(db.String(255), nullable=True)
     share_count = db.Column(db.Integer, default=0, nullable=False)
+    # Set only on a repost: points at the original post being reposted.
+    # `text` on a repost row is an optional quote/caption the reposter
+    # added, not the original post's own text (that's read from
+    # `original_post` instead). SET NULL on delete so a repost survives
+    # its original being removed — it just renders without the original
+    # attached rather than disappearing itself.
+    repost_of_id = db.Column(
+        db.Integer, db.ForeignKey("posts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
 
     user = db.relationship(
         "User", backref=db.backref("posts", lazy="dynamic", cascade="all, delete-orphan")
+    )
+    original_post = db.relationship(
+        "Post", remote_side=[id],
+        backref=db.backref("reposts", lazy="dynamic", passive_deletes=True),
     )
 
     def to_dict(self, viewer_id=None):
         liked_by_me = (
             viewer_id is not None
             and self.likes.filter_by(user_id=viewer_id).first() is not None
+        )
+        reposted_by_me = (
+            viewer_id is not None
+            and Post.query.filter_by(user_id=viewer_id, repost_of_id=self.id).first() is not None
         )
         return {
             "id": self.id,
@@ -584,6 +602,12 @@ class Post(db.Model):
             "liked_by_me": liked_by_me,
             "comment_count": self.comments.count(),
             "share_count": self.share_count,
+            "repost_of_id": self.repost_of_id,
+            # Nested one level only — reposting a repost attaches to the
+            # true original (see repost_post()), so this never recurses.
+            "repost_of": self.original_post.to_dict(viewer_id=viewer_id) if self.original_post else None,
+            "repost_count": self.reposts.count(),
+            "reposted_by_me": reposted_by_me,
         }
 
     def __repr__(self):
@@ -844,7 +868,7 @@ class GroupMessageReaction(db.Model):
 
 class Notification(db.Model):
     """A single notification for `user_id`, e.g. someone followed them,
-    liked/commented on/shared their post, reacted to their story or a
+    liked/commented on/shared/reposted their post, reacted to their story or a
     message/group message they sent, or added them to a group. `actor_id`
     is whoever triggered it (nullable — SET NULL on delete, so a
     notification outlives the actor's account being removed, same
@@ -856,7 +880,7 @@ class Notification(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     actor_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
-    # 'follow' | 'post_like' | 'post_comment' | 'post_share' |
+    # 'follow' | 'post_like' | 'post_comment' | 'post_share' | 'post_repost' |
     # 'story_reaction' | 'message_reaction' | 'group_message_reaction' |
     # 'group_added'
     type = db.Column(db.String(30), nullable=False)
@@ -878,6 +902,7 @@ class Notification(db.Model):
         "post_like": "liked your post",
         "post_comment": "commented on your post",
         "post_share": "shared your post",
+        "post_repost": "reposted your post",
         "story_reaction": "reacted to your story",
         "message_reaction": "reacted to your message",
         "group_message_reaction": "reacted to your message in {group}",
@@ -949,7 +974,7 @@ def _ensure_schema():
     if "last_seen" not in existing_columns:
         logger.info("Migrating users table: adding 'last_seen' column")
         with db.engine.begin() as conn:
-            conn.execute(text("ALTER TABLE users ADD COLUMN last_seen DATETIME"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN last_seen TIMESTAMP"))
 
     if "phone" not in existing_columns:
         logger.info("Migrating users table: adding 'phone' column")
@@ -987,7 +1012,7 @@ def _ensure_schema():
     if "verified_at" not in existing_columns:
         logger.info("Migrating users table: adding 'verified_at' column")
         with db.engine.begin() as conn:
-            conn.execute(text("ALTER TABLE users ADD COLUMN verified_at DATETIME"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN verified_at TIMESTAMP"))
             conn.execute(text(
                 "UPDATE users SET verified_at = created_at WHERE id = (SELECT MIN(id) FROM users)"
             ))
@@ -1005,7 +1030,7 @@ def _ensure_schema():
     if "last_feed_view_at" not in existing_columns:
         logger.info("Migrating users table: adding 'last_feed_view_at' column")
         with db.engine.begin() as conn:
-            conn.execute(text("ALTER TABLE users ADD COLUMN last_feed_view_at DATETIME"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN last_feed_view_at TIMESTAMP"))
             # Backfill existing accounts to "now" so upgrading doesn't dump a
             # huge unread count on everyone for posts they'd already seen
             # before this feature existed — only genuinely new posts from
@@ -1045,7 +1070,21 @@ def _ensure_schema():
         if "last_read_at" not in existing_group_member_columns:
             logger.info("Migrating group_members table: adding 'last_read_at' column")
             with db.engine.begin() as conn:
-                conn.execute(text("ALTER TABLE group_members ADD COLUMN last_read_at DATETIME"))
+                conn.execute(text("ALTER TABLE group_members ADD COLUMN last_read_at TIMESTAMP"))
+
+    if "posts" in inspector.get_table_names():
+        existing_post_columns = {col["name"] for col in inspector.get_columns("posts")}
+
+        if "repost_of_id" not in existing_post_columns:
+            logger.info("Migrating posts table: adding 'repost_of_id' column")
+            with db.engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE posts ADD COLUMN repost_of_id INTEGER "
+                    "REFERENCES posts(id) ON DELETE SET NULL"
+                ))
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_posts_repost_of_id ON posts (repost_of_id)"
+                ))
 
 
 with app.app_context():
@@ -3645,6 +3684,74 @@ def share_post(post_id):
     socketio.emit("post_shared", {"post_id": post_id, "share_count": post.share_count})
 
     return jsonify({"share_count": post.share_count}), 200
+
+
+@app.route("/api/posts/<int:post_id>/repost", methods=["POST"])
+@login_required
+@limiter.limit("60 per hour")
+def repost_post(post_id):
+    """Reposts a feed post onto the current user's own feed as a new post
+    row that references the original, with an optional quote/caption —
+    the same "quote repost" idea as other social feeds. Reposting a post
+    you've already reposted removes that repost instead (toggle, same
+    pattern as like_post). Reposting a repost attaches to the original
+    underneath it, so the chain never nests more than one level deep."""
+    post = Post.query.get(post_id)
+    if not post:
+        return jsonify({"error": "Post not found."}), 404
+
+    original = post.original_post if post.repost_of_id else post
+
+    data = request.get_json(silent=True) or {}
+    quote_text = (data.get("text") or "").strip()
+    if len(quote_text) > POST_TEXT_MAX_LENGTH:
+        return jsonify({"error": f"Post text can't exceed {POST_TEXT_MAX_LENGTH} characters."}), 400
+
+    existing = Post.query.filter_by(user_id=current_user.id, repost_of_id=original.id).first()
+
+    try:
+        if existing:
+            existing_id = existing.id
+            db.session.delete(existing)
+            db.session.commit()
+            reposted = False
+            repost_payload = None
+        else:
+            repost = Post(user_id=current_user.id, text=quote_text or None, repost_of_id=original.id)
+            db.session.add(repost)
+            db.session.commit()
+            reposted = True
+            repost_payload = repost.to_dict(viewer_id=current_user.id)
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to toggle repost")
+        return jsonify({"error": "Could not update repost. Please try again."}), 500
+
+    repost_count = original.reposts.count()
+
+    if reposted:
+        create_notification(
+            user_id=original.user_id, actor_id=current_user.id,
+            ntype="post_repost", post_id=original.id
+        )
+        # Broadcast the repost itself like any other new post, so it shows
+        # up live in everyone's feed — same as create_post().
+        socketio.emit("new_post", repost_payload)
+    else:
+        socketio.emit("post_deleted", {"post_id": existing_id})
+
+    socketio.emit("post_reposted", {
+        "original_post_id": original.id,
+        "reposter_id": current_user.id,
+        "reposted": reposted,
+        "repost_count": repost_count,
+    })
+
+    return jsonify({
+        "reposted": reposted,
+        "repost_count": repost_count,
+        "data": repost_payload,
+    }), 200
 
 
 def _story_cleanup_loop():
