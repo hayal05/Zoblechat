@@ -730,6 +730,13 @@ class GroupMember(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     role = db.Column(db.String(10), nullable=False, default="member")  # 'admin' | 'member'
     joined_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    # Stamped forward every time this member has the group conversation open
+    # (see the "mark_group_read" socket event) — lets GroupMessage.to_dict()
+    # figure out whether *every other* member has seen a given message, the
+    # same "read" concept 1:1 chat already has via Message.is_read, just
+    # derived from a per-member watermark instead of a single boolean since
+    # a group message has more than one possible reader.
+    last_read_at = db.Column(db.DateTime, nullable=True)
 
     user = db.relationship("User")
 
@@ -765,6 +772,21 @@ class GroupMessage(db.Model):
     sender = db.relationship("User")
 
     def to_dict(self):
+        # "Read" for a group message means every *other* current member has
+        # opened the conversation at least as recently as this message was
+        # sent (their last_read_at watermark is past it) — mirrors the
+        # single/double check semantics of Message.is_read, just evaluated
+        # against every other member instead of a single recipient. A group
+        # with no other members yet (just the sender) is never "read".
+        other_members = GroupMember.query.filter(
+            GroupMember.group_id == self.group_id,
+            GroupMember.user_id != self.sender_id,
+        ).all()
+        is_read = bool(other_members) and all(
+            m.last_read_at is not None and m.last_read_at >= self.timestamp
+            for m in other_members
+        )
+
         return {
             "id": self.id,
             "group_id": self.group_id,
@@ -779,10 +801,114 @@ class GroupMessage(db.Model):
                 if self.image_path else None
             ),
             "timestamp": to_iso_utc(self.timestamp),
+            "is_read": is_read,
+            # Same raw per-user shape as Message.to_dict()'s reactions field —
+            # lets the client reuse its existing reaction-rendering logic
+            # unchanged for group messages.
+            "reactions": [
+                {"user_id": r.user_id, "emoji": r.emoji}
+                for r in self.reactions.order_by(GroupMessageReaction.created_at.asc())
+            ],
         }
 
     def __repr__(self):
         return f"<GroupMessage {self.id} group={self.group_id} from={self.sender_id}>"
+
+
+class GroupMessageReaction(db.Model):
+    """A single reaction sticker from one group member on one GroupMessage —
+    the group-chat equivalent of MessageReaction, with identical one-per-user
+    swap/remove semantics."""
+    __tablename__ = "group_message_reactions"
+
+    id = db.Column(db.Integer, primary_key=True)
+    group_message_id = db.Column(
+        db.Integer, db.ForeignKey("group_messages.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    emoji = db.Column(db.String(8), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    message = db.relationship(
+        "GroupMessage", backref=db.backref("reactions", lazy="dynamic", cascade="all, delete-orphan")
+    )
+    reactor = db.relationship("User")
+
+    __table_args__ = (
+        db.UniqueConstraint("group_message_id", "user_id", name="uq_group_message_reaction_user"),
+    )
+
+    def __repr__(self):
+        return f"<GroupMessageReaction message={self.group_message_id} user={self.user_id}>"
+
+
+class Notification(db.Model):
+    """A single notification for `user_id`, e.g. someone followed them,
+    liked/commented on/shared their post, reacted to their story or a
+    message/group message they sent, or added them to a group. `actor_id`
+    is whoever triggered it (nullable — SET NULL on delete, so a
+    notification outlives the actor's account being removed, same
+    reasoning as Group.created_by). Exactly one of post_id/story_id/
+    group_id/message_id/group_message_id is populated depending on `type`;
+    the rest stay None."""
+    __tablename__ = "notifications"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    actor_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    # 'follow' | 'post_like' | 'post_comment' | 'post_share' |
+    # 'story_reaction' | 'message_reaction' | 'group_message_reaction' |
+    # 'group_added'
+    type = db.Column(db.String(30), nullable=False)
+    post_id = db.Column(db.Integer, db.ForeignKey("posts.id", ondelete="SET NULL"), nullable=True)
+    story_id = db.Column(db.Integer, db.ForeignKey("stories.id", ondelete="SET NULL"), nullable=True)
+    group_id = db.Column(db.Integer, db.ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
+    message_id = db.Column(db.Integer, db.ForeignKey("messages.id", ondelete="SET NULL"), nullable=True)
+    group_message_id = db.Column(db.Integer, db.ForeignKey("group_messages.id", ondelete="SET NULL"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    is_read = db.Column(db.Boolean, default=False, nullable=False, index=True)
+
+    actor = db.relationship("User", foreign_keys=[actor_id])
+
+    # Human-readable text per type, filled in by to_dict(). {group} is
+    # swapped for the group's current name at render time (not baked in at
+    # creation) so a later rename shows up correctly on old notifications too.
+    _TEXT_BY_TYPE = {
+        "follow": "started following you",
+        "post_like": "liked your post",
+        "post_comment": "commented on your post",
+        "post_share": "shared your post",
+        "story_reaction": "reacted to your story",
+        "message_reaction": "reacted to your message",
+        "group_message_reaction": "reacted to your message in {group}",
+        "group_added": "added you to {group}",
+    }
+
+    def to_dict(self):
+        text = self._TEXT_BY_TYPE.get(self.type, "")
+        if "{group}" in text:
+            group = Group.query.get(self.group_id) if self.group_id else None
+            text = text.format(group=group.name if group else "a group")
+
+        return {
+            "id": self.id,
+            "type": self.type,
+            "actor_id": self.actor_id,
+            "actor_username": self.actor.username if self.actor else None,
+            "actor_full_name": self.actor.full_name if self.actor else None,
+            "actor_profile_pic": self.actor.profile_pic if self.actor else None,
+            "text": text,
+            "post_id": self.post_id,
+            "story_id": self.story_id,
+            "group_id": self.group_id,
+            "message_id": self.message_id,
+            "group_message_id": self.group_message_id,
+            "created_at": to_iso_utc(self.created_at),
+            "is_read": self.is_read,
+        }
+
+    def __repr__(self):
+        return f"<Notification {self.id} user={self.user_id} type={self.type}>"
 
 
 def _ensure_schema():
@@ -912,6 +1038,14 @@ def _ensure_schema():
             logger.info("Migrating groups table: adding 'photo' column")
             with db.engine.begin() as conn:
                 conn.execute(text("ALTER TABLE groups ADD COLUMN photo VARCHAR(255)"))
+
+    if "group_members" in inspector.get_table_names():
+        existing_group_member_columns = {col["name"] for col in inspector.get_columns("group_members")}
+
+        if "last_read_at" not in existing_group_member_columns:
+            logger.info("Migrating group_members table: adding 'last_read_at' column")
+            with db.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE group_members ADD COLUMN last_read_at DATETIME"))
 
 
 with app.app_context():
@@ -1252,6 +1386,43 @@ def get_conversation_partner_ids(user_id):
     }
 
 
+def create_notification(user_id, actor_id=None, ntype=None, post_id=None,
+                         story_id=None, group_id=None, message_id=None,
+                         group_message_id=None):
+    """Creates one Notification row for `user_id` and pushes it live over
+    Socket.IO to their private room, so the bell badge counts up instantly
+    without the client having to poll. Never notifies someone about their
+    own action (liking your own post, reacting to your own message, etc.)
+    since actor_id == user_id in that case just means you triggered it.
+    Failures are logged and swallowed rather than raised — a notification
+    is a nice-to-have side effect of the real action (the like/comment/
+    follow/etc. itself already succeeded by the time this is called), so
+    it should never turn an otherwise-successful request into a 500."""
+    if actor_id is not None and actor_id == user_id:
+        return None
+
+    try:
+        notif = Notification(
+            user_id=user_id,
+            actor_id=actor_id,
+            type=ntype,
+            post_id=post_id,
+            story_id=story_id,
+            group_id=group_id,
+            message_id=message_id,
+            group_message_id=group_message_id,
+        )
+        db.session.add(notif)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to create notification (type=%s, user_id=%s)", ntype, user_id)
+        return None
+
+    socketio.emit("new_notification", notif.to_dict(), room=get_room_name(user_id))
+    return notif
+
+
 def purge_expired_stories():
     """Deletes story rows (and their reactions, via cascade) plus the
     underlying image files once expires_at has passed. Story queries already
@@ -1482,6 +1653,9 @@ def index():
         current_user_data=current_user.to_dict(include_email=True),
         users=users_payload,
         feed_unread_count=get_feed_unread_count(current_user.id, current_user.last_feed_view_at),
+        notifications_unread_count=Notification.query.filter_by(
+            user_id=current_user.id, is_read=False
+        ).count(),
     ))
 
 
@@ -1973,6 +2147,9 @@ def toggle_follow(user_id):
 
     follower_count = target.followers.count()
 
+    if following:
+        create_notification(user_id=user_id, actor_id=current_user.id, ntype="follow")
+
     socketio.emit("follow_updated", {
         "follower_id": current_user.id,
         "followed_id": user_id,
@@ -2203,6 +2380,12 @@ def react_to_message(message_id):
         message.recipient_id if current_user.id == message.sender_id else message.sender_id
     )
 
+    if my_reaction is not None and current_user.id != message.sender_id:
+        create_notification(
+            user_id=message.sender_id, actor_id=current_user.id,
+            ntype="message_reaction", message_id=message_id,
+        )
+
     # Broadcast to both participants' rooms (all open tabs/devices on both
     # ends), same pattern as handle_send_message — the reactor's own other
     # tabs need to see this too, not just the other party.
@@ -2214,6 +2397,73 @@ def react_to_message(message_id):
         "message_id": message_id,
         "reactions": reactions,
     }, room=get_room_name(current_user.id))
+
+    return jsonify({"my_reaction": my_reaction, "reactions": reactions}), 200
+
+
+@app.route("/api/groups/messages/<int:message_id>/react", methods=["POST"])
+@login_required
+@limiter.limit("300 per hour")
+def react_to_group_message(message_id):
+    """Group-chat equivalent of react_to_message — same payload shape,
+    same add/swap/remove toggle semantics, just scoped to "any current
+    member of the group" instead of "one of the two 1:1 participants".
+    """
+    data = request.get_json(silent=True) or {}
+    emoji = (data.get("emoji") or "").strip()
+
+    if emoji not in ALLOWED_REACTION_EMOJIS:
+        return jsonify({"error": "Unsupported reaction."}), 400
+
+    message = GroupMessage.query.get(message_id)
+    if not message:
+        return jsonify({"error": "Message not found."}), 404
+
+    if not is_group_member(message.group_id, current_user.id):
+        return jsonify({"error": "You can only react to messages in your own groups."}), 403
+
+    existing = GroupMessageReaction.query.filter_by(
+        group_message_id=message_id, user_id=current_user.id
+    ).first()
+
+    try:
+        if existing and existing.emoji == emoji:
+            db.session.delete(existing)
+            my_reaction = None
+        elif existing:
+            existing.emoji = emoji
+            my_reaction = emoji
+        else:
+            db.session.add(
+                GroupMessageReaction(group_message_id=message_id, user_id=current_user.id, emoji=emoji)
+            )
+            my_reaction = emoji
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to update group message reaction")
+        return jsonify({"error": "Could not update reaction. Please try again."}), 500
+
+    reactions = [
+        {"user_id": r.user_id, "emoji": r.emoji}
+        for r in message.reactions.order_by(GroupMessageReaction.created_at.asc())
+    ]
+
+    if my_reaction is not None and current_user.id != message.sender_id:
+        create_notification(
+            user_id=message.sender_id, actor_id=current_user.id,
+            ntype="group_message_reaction", group_id=message.group_id,
+            group_message_id=message_id,
+        )
+
+    # Broadcast to the whole group room (every member's open tabs, including
+    # our own other tabs) rather than two individual rooms like the 1:1
+    # version — a group reaction is visible to everyone in the conversation.
+    socketio.emit("group_message_reacted", {
+        "message_id": message_id,
+        "group_id": message.group_id,
+        "reactions": reactions,
+    }, room=get_group_room_name(message.group_id))
 
     return jsonify({"my_reaction": my_reaction, "reactions": reactions}), 200
 
@@ -2281,6 +2531,11 @@ def create_group():
         return jsonify({"error": "Could not create group. Please try again."}), 500
 
     payload = group.to_dict(viewer_id=current_user.id)
+
+    for uid in member_ids:
+        create_notification(
+            user_id=uid, actor_id=current_user.id, ntype="group_added", group_id=group.id
+        )
 
     # Every member's open tabs should see the new group appear instantly,
     # same live-update principle as receive_message — join each member's
@@ -2614,6 +2869,11 @@ def add_group_members(group_id):
         return jsonify({"error": "Could not add members. Please try again."}), 500
 
     payload = group.to_dict(viewer_id=current_user.id)
+
+    for uid in new_ids:
+        create_notification(
+            user_id=uid, actor_id=current_user.id, ntype="group_added", group_id=group_id
+        )
 
     # Existing members' open tabs get a live-updated member list/count.
     socketio.emit("group_updated", payload, room=get_group_room_name(group_id))
@@ -3002,6 +3262,11 @@ def react_to_story(story_id):
 
     reaction_count = story.reactions.count()
 
+    if reacted:
+        create_notification(
+            user_id=story.user_id, actor_id=current_user.id, ntype="story_reaction", story_id=story_id
+        )
+
     # Only the story owner's open tab(s) need a live update — everyone else
     # already has their own toggle state from this response.
     socketio.emit("story_reacted", {
@@ -3080,6 +3345,67 @@ def mark_feed_seen():
         logger.exception("Failed to update last_feed_view_at")
         return jsonify({"error": "Could not update feed status."}), 500
     return jsonify({"message": "Feed marked as seen."}), 200
+
+
+# -------------------------------------------------------------------
+# Notifications — a bell icon next to the news feed icon, live-updated
+# over Socket.IO ("new_notification") whenever create_notification() fires
+# from a like/comment/share/follow/reaction/group-add elsewhere in this
+# file. Unlike the feed's single watermark, each notification keeps its
+# own is_read flag so the dropdown can tell individual items apart.
+# -------------------------------------------------------------------
+@app.route("/api/notifications", methods=["GET"])
+@login_required
+def list_notifications():
+    """Cursor-paginated: pass ?before_id=<id> to fetch the page of
+    notifications older than that one, same pattern as /api/posts."""
+    before_id = request.args.get("before_id", type=int)
+
+    query = Notification.query.filter_by(user_id=current_user.id)
+    if before_id:
+        query = query.filter(Notification.id < before_id)
+
+    page_size = 30
+    rows = query.order_by(Notification.id.desc()).limit(page_size + 1).all()
+    has_more = len(rows) > page_size
+    rows = rows[:page_size]
+
+    return jsonify({
+        "notifications": [n.to_dict() for n in rows],
+        "has_more": has_more,
+    }), 200
+
+
+@app.route("/api/notifications/unread-count", methods=["GET"])
+@login_required
+def notifications_unread_count():
+    """Lightweight poll endpoint for the bell badge — lets the client
+    resync (e.g. after reconnecting) instead of trusting only the running
+    client-side tally built from Socket.IO events, same role
+    /api/posts/unread-count plays for the feed badge."""
+    count = Notification.query.filter_by(user_id=current_user.id, is_read=False).count()
+    return jsonify({"unread_count": count}), 200
+
+
+@app.route("/api/notifications/mark-seen", methods=["POST"])
+@login_required
+def mark_notifications_seen():
+    """Called when the notifications dropdown is opened — flips every
+    currently-unread notification for this user to read, all at once
+    (there's no per-item mark-read affordance in the UI, only "open the
+    panel" the way opening a group/1:1 conversation marks its messages read)."""
+    try:
+        updated_count = (
+            Notification.query.filter_by(user_id=current_user.id, is_read=False)
+            .update({"is_read": True})
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to mark notifications as seen")
+        return jsonify({"error": "Could not update notification status."}), 500
+
+    return jsonify({"message": "Notifications marked as seen.", "count": updated_count}), 200
 
 
 @app.route("/api/posts", methods=["GET"])
@@ -3228,6 +3554,11 @@ def like_post(post_id):
 
     like_count = post.likes.count()
 
+    if liked:
+        create_notification(
+            user_id=post.user_id, actor_id=current_user.id, ntype="post_like", post_id=post_id
+        )
+
     socketio.emit("post_liked", {
         "post_id": post_id,
         "liker_id": current_user.id,
@@ -3278,6 +3609,10 @@ def add_post_comment(post_id):
     payload = comment.to_dict()
     payload["comment_count"] = post.comments.count()
 
+    create_notification(
+        user_id=post.user_id, actor_id=current_user.id, ntype="post_comment", post_id=post_id
+    )
+
     socketio.emit("post_commented", payload)
 
     return jsonify({"message": "Comment posted.", "data": payload}), 201
@@ -3302,6 +3637,10 @@ def share_post(post_id):
         db.session.rollback()
         logger.exception("Failed to record post share")
         return jsonify({"error": "Could not record share. Please try again."}), 500
+
+    create_notification(
+        user_id=post.user_id, actor_id=current_user.id, ntype="post_share", post_id=post_id
+    )
 
     socketio.emit("post_shared", {"post_id": post_id, "share_count": post.share_count})
 
@@ -3597,6 +3936,55 @@ def handle_mark_read(data):
         "reader_id": current_user.id,
         "count": updated_count,
     }, room=get_room_name(sender_id))
+
+
+@socketio.on("mark_group_read")
+def handle_mark_group_read(data):
+    """
+    Expected payload:
+    {
+        "group_id": <int>
+    }
+    Group-chat equivalent of "mark_read" — stamps the current user's
+    GroupMember.last_read_at watermark to now, then tells everyone else in
+    the room so senders can flip their own outgoing ticks to "read" live
+    without anyone re-fetching the conversation.
+    """
+    if not current_user.is_authenticated:
+        emit("error", {"error": "Not authenticated."})
+        return
+
+    if not isinstance(data, dict):
+        emit("error", {"error": "Invalid payload."})
+        return
+
+    try:
+        group_id = int(data.get("group_id"))
+    except (TypeError, ValueError):
+        emit("error", {"error": "group_id must be a valid group id."})
+        return
+
+    if not is_group_member(group_id, current_user.id):
+        emit("error", {"error": "You are not a member of this group."})
+        return
+
+    now = datetime.utcnow()
+    try:
+        GroupMember.query.filter_by(group_id=group_id, user_id=current_user.id).update(
+            {"last_read_at": now}
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to update group read status")
+        emit("error", {"error": "Could not update read status."})
+        return
+
+    socketio.emit("group_messages_seen", {
+        "group_id": group_id,
+        "reader_id": current_user.id,
+        "at": to_iso_utc(now),
+    }, room=get_group_room_name(group_id))
 
 
 @socketio.on("disconnect")
