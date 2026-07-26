@@ -143,23 +143,23 @@ OTP_RESEND_COOLDOWN_SECONDS = 45
 # -------------------------------------------------------------------
 # Outbound email (verification codes only)
 # -------------------------------------------------------------------
-# Sent via the Resend HTTP API (https://resend.com) rather than raw SMTP.
-# This matters on platforms like Render, whose free web services block
-# all outbound traffic to SMTP ports (25/465/587) — an HTTPS POST to
-# api.resend.com on port 443 isn't affected by that restriction, and it
-# also sidesteps needing mailbox credentials/app-passwords entirely.
+# Sent via the Brevo HTTP API (https://brevo.com) over HTTPS (port 443),
+# which isn't affected by Render's free-tier block on outbound SMTP ports.
 #
-# All optional at the config level: if RESEND_API_KEY isn't set,
+# Unlike Resend, Brevo doesn't require verifying a whole domain to send to
+# arbitrary recipients — it only requires verifying one sender email
+# address you already own (Brevo emails that address a 6-digit code to
+# confirm you control it). That makes it a good fit when there's no
+# domain to authenticate: set BREVO_FROM_EMAIL to the address you
+# verified in the Brevo dashboard and you can send to anyone from it.
+#
+# All optional at the config level: if BREVO_API_KEY isn't set,
 # send_otp_email() logs the code instead of emailing it, so local
 # development never needs a real API key just to exercise the signup flow.
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
-# resend.dev's shared sandbox sender works out of the box with no domain
-# setup, but only delivers to the email the Resend account itself is
-# registered with — fine for testing, but you'll want to verify your own
-# domain in the Resend dashboard and set RESEND_FROM to an address on it
-# before real users can receive codes at arbitrary addresses.
-RESEND_FROM = os.environ.get("RESEND_FROM", "Zoble <onboarding@resend.dev>")
-RESEND_API_URL = "https://api.resend.com/emails"
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
+BREVO_FROM_EMAIL = os.environ.get("BREVO_FROM_EMAIL")
+BREVO_FROM_NAME = os.environ.get("BREVO_FROM_NAME", "Zoble Chat")
+BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
 
 # -------------------------------------------------------------------
 # App Configuration
@@ -952,10 +952,10 @@ def generate_otp_code():
 
 
 def send_otp_email(to_email, code, full_name):
-    """Emails a verification code for the signup flow via the Resend HTTP
-    API. Falls back to just logging the code when RESEND_API_KEY isn't
+    """Emails a verification code for the signup flow via the Brevo HTTP
+    API. Falls back to just logging the code when BREVO_API_KEY isn't
     configured, so local development and this project's own tests can
-    exercise registration without a real API key — see the RESEND_*
+    exercise registration without a real API key — see the BREVO_*
     constants above.
 
     Raises on a genuine send failure so the caller can surface a real error
@@ -970,30 +970,28 @@ def send_otp_email(to_email, code, full_name):
         f"try to sign up for Zoble, you can ignore this email.\n"
     )
 
-    if not RESEND_API_KEY:
-        logger.info("[DEV] Verification code for %s: %s (no RESEND_API_KEY configured)", to_email, code)
+    if not BREVO_API_KEY or not BREVO_FROM_EMAIL:
+        logger.info("[DEV] Verification code for %s: %s (no BREVO_API_KEY/BREVO_FROM_EMAIL configured)", to_email, code)
         return
 
     payload = json.dumps({
-        "from": RESEND_FROM,
-        "to": [to_email],
+        "sender": {"name": BREVO_FROM_NAME, "email": BREVO_FROM_EMAIL},
+        "to": [{"email": to_email}],
         "subject": subject,
-        "text": text_body,
+        "textContent": text_body,
     }).encode("utf-8")
 
     req = urllib.request.Request(
-        RESEND_API_URL,
+        BREVO_API_URL,
         data=payload,
         method="POST",
         headers={
-            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "api-key": BREVO_API_KEY,
             "Content-Type": "application/json",
-            # Cloudflare sits in front of api.resend.com and blocks requests
-            # carrying urllib's default "Python-urllib/x.y" User-Agent as a
-            # bot signature (surfaces as a 403 with Cloudflare error 1010).
-            # Any non-default UA avoids this.
-            "User-Agent": "zoble-chat/1.0 (+https://zoble-chat.onrender.com)",
             "Accept": "application/json",
+            # Some HTTP APIs behind bot-protection reject urllib's default
+            # "Python-urllib/x.y" User-Agent — send a normal one to be safe.
+            "User-Agent": "zoble-chat/1.0 (+https://zoble-chat.onrender.com)",
         },
     )
 
@@ -1001,14 +999,14 @@ def send_otp_email(to_email, code, full_name):
         with urllib.request.urlopen(req, timeout=10) as resp:
             resp.read()
     except urllib.error.HTTPError as e:
-        # Resend returns a JSON error body (e.g. unverified domain, invalid
-        # "to" address for a sandbox sender) — log it so the real cause
-        # shows up server-side instead of just a bare status code.
+        # Brevo returns a JSON error body (e.g. unverified sender, invalid
+        # API key) — log it so the real cause shows up server-side instead
+        # of just a bare status code.
         detail = e.read().decode("utf-8", errors="replace")
-        logger.error("Resend API rejected the request (%s): %s", e.code, detail)
+        logger.error("Brevo API rejected the request (%s): %s", e.code, detail)
         raise
     except urllib.error.URLError:
-        logger.exception("Failed to reach Resend API")
+        logger.exception("Failed to reach Brevo API")
         raise
 
 
