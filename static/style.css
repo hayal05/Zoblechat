@@ -1272,6 +1272,14 @@ a:focus-visible {
 .modal-backdrop[hidden] {
     display: none;
 }
+/* Edit-profile can now open nested on top of the full-screen account page
+   (tap the avatar -> account page -> Edit profile). Both share the same
+   .modal-backdrop z-index, and account-modal sits later in the DOM, so
+   without this override it would paint over the edit-profile popup
+   instead of underneath it. */
+#profileModalBackdrop {
+    z-index: 110;
+}
 @keyframes modal-fade-in {
     from { opacity: 0; }
     to { opacity: 1; }
