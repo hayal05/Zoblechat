@@ -82,40 +82,17 @@
                 </div>
             </div>
 
-            <!-- Profile now lives top-right, level with the search bar -->
+            <!-- Profile now lives top-right, level with the search bar. Tapping
+                 it opens the full-screen account page (own profile: photo,
+                 name, follower/following counts, every post, plus the
+                 edit-profile/log-out controls that used to live in a popover
+                 menu here) instead of a small dropdown. -->
             <div class="profile-avatar-wrap">
-                <button class="profile-avatar-btn" id="profileMenuBtn" type="button" title="Account menu" aria-haspopup="true" aria-expanded="false">
+                <button class="profile-avatar-btn" id="profileMenuBtn" type="button" title="View profile">
                     <span class="avatar avatar-sm" id="ownAvatarWrap">
                         <img id="ownAvatar" src="{{ url_for('static', filename='uploads/' ~ current_user_data.profile_pic) }}" alt="Your avatar">
                     </span>
                 </button>
-
-                <!-- Popover menu anchored to the profile icon: edit profile + log out -->
-                <div class="profile-menu profile-menu-top" id="profileMenu" hidden>
-                    <div class="profile-menu-header">
-                        <span class="avatar avatar-sm">
-                            <img src="{{ url_for('static', filename='uploads/' ~ current_user_data.profile_pic) }}" alt="Your avatar">
-                        </span>
-                        <span class="profile-menu-header-name" id="ownFullName">{{ current_user_data.full_name }}{{ verified_badge(current_user_data) }}</span>
-                    </div>
-                    <div class="profile-menu-divider"></div>
-                    <button class="profile-menu-item" id="openProfileBtn" type="button">
-                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                            <circle cx="12" cy="7" r="4"></circle>
-                        </svg>
-                        <span>Edit profile</span>
-                    </button>
-                    <div class="profile-menu-divider"></div>
-                    <button class="profile-menu-item profile-menu-item-danger" id="logoutBtn" type="button">
-                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-                            <polyline points="16 17 21 12 16 7"></polyline>
-                            <line x1="21" y1="12" x2="9" y2="12"></line>
-                        </svg>
-                        <span>Log out</span>
-                    </button>
-                </div>
             </div>
         </div>
 
@@ -253,7 +230,7 @@
     <div class="modal-backdrop" id="accountModalBackdrop" hidden>
         <div class="modal-card modal-card-lg account-modal-card" role="dialog" aria-modal="true" aria-labelledby="accountModalName">
             <div class="modal-header">
-                <h2>Account</h2>
+                <h2 id="accountModalTitle">Account</h2>
             </div>
 
             <div class="modal-body account-modal-body">
@@ -277,6 +254,26 @@
                         <span>Chat</span>
                     </button>
                     <button class="btn btn-primary account-follow-btn" id="accountFollowBtn" type="button">Follow</button>
+
+                    <!-- Shown only on your own account page, in place of the
+                         Chat/Follow buttons above — the same "edit profile"
+                         and "log out" controls that used to live in the
+                         avatar's popover menu. -->
+                    <button class="btn btn-secondary account-edit-btn" id="accountEditProfileBtn" type="button" hidden>
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                        </svg>
+                        <span>Edit profile</span>
+                    </button>
+                    <button class="btn btn-danger account-logout-btn" id="accountLogoutBtn" type="button" hidden>
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                            <polyline points="16 17 21 12 16 7"></polyline>
+                            <line x1="21" y1="12" x2="9" y2="12"></line>
+                        </svg>
+                        <span>Log out</span>
+                    </button>
                 </div>
             </div>
 
@@ -662,6 +659,7 @@
     // trip through the socket broadcast.
     const CURRENT_USER_IDENTITY = {
         user_id: CURRENT_USER_ID,
+        username: {{ current_user_data.username|tojson }},
         full_name: {{ current_user_data.full_name|tojson }},
         profile_pic: {{ current_user_data.profile_pic|tojson }},
         is_verified: {{ 'true' if current_user_data.is_verified else 'false' }},
@@ -2314,8 +2312,14 @@
             CURRENT_USER_IDENTITY.is_verified = identity.is_verified;
             CURRENT_USER_IDENTITY.is_admin = identity.is_admin;
             ownAvatar.src = `/static/uploads/${identity.profile_pic}`;
-            ownFullName.innerHTML = `${escapeHtml(identity.full_name)}${verifiedBadgeHtml(user)}`;
             profileAvatarPreview.src = `/static/uploads/${identity.profile_pic}`;
+
+            // Keep the account page in sync too, if it's currently open on
+            // your own profile.
+            if (accountModalUserId === CURRENT_USER_ID) {
+                accountAvatarImg.src = `/static/uploads/${identity.profile_pic}`;
+                accountModalName.innerHTML = `${escapeHtml(identity.full_name)}${verifiedBadgeHtml(user)}`;
+            }
         }
     }
 
@@ -4320,6 +4324,7 @@
     // Facebook profile) every post they've shared, paged in as you scroll.
     // ---------------------------------------------------------------
     const accountModalBackdrop = document.getElementById("accountModalBackdrop");
+    const accountModalTitle = document.getElementById("accountModalTitle");
     const accountAvatarImg = document.getElementById("accountAvatarImg");
     const accountModalName = document.getElementById("accountModalName");
     const accountModalUsername = document.getElementById("accountModalUsername");
@@ -4327,6 +4332,8 @@
     const accountFollowingCount = document.getElementById("accountFollowingCount");
     const accountChatBtn = document.getElementById("accountChatBtn");
     const accountFollowBtn = document.getElementById("accountFollowBtn");
+    const accountEditProfileBtn = document.getElementById("accountEditProfileBtn");
+    const accountLogoutBtn = document.getElementById("accountLogoutBtn");
     const accountModalPostsScroll = document.getElementById("accountModalPostsScroll");
     const accountModalPosts = document.getElementById("accountModalPosts");
     const accountModalPostsEmpty = document.getElementById("accountModalPostsEmpty");
@@ -4394,6 +4401,18 @@
         accountFollowBtn.classList.toggle("btn-secondary", isFollowing);
     }
 
+    // Toggles between "Chat"/"Follow" (viewing someone else) and
+    // "Edit profile"/"Log out" (viewing your own account page) — the
+    // latter is where those controls now live, in place of the popover
+    // menu that used to hang off the avatar button.
+    function renderAccountModalOwnState(isOwn) {
+        accountModalTitle.textContent = isOwn ? "My profile" : "Account";
+        accountChatBtn.hidden = isOwn;
+        accountFollowBtn.hidden = isOwn;
+        accountEditProfileBtn.hidden = !isOwn;
+        accountLogoutBtn.hidden = !isOwn;
+    }
+
     async function openAccountModal(userId) {
         if (!userId) return;
         accountModalUserId = userId;
@@ -4404,17 +4423,19 @@
         // of the modal from opening.
         loadAccountPagePosts(userId, true);
 
+        const isOwn = userId === CURRENT_USER_ID;
+
         // Show whatever we already know instantly (from knownUsers / the
-        // feed post itself), then refresh with the real counts + follow
-        // state from the server once it arrives.
-        const cached = knownUsers[userId];
+        // feed post itself, or — for your own account — CURRENT_USER_IDENTITY),
+        // then refresh with the real counts + follow state from the server
+        // once it arrives.
+        const cached = isOwn ? CURRENT_USER_IDENTITY : knownUsers[userId];
         if (cached) {
             accountAvatarImg.src = `/static/uploads/${cached.profile_pic}`;
             accountModalName.innerHTML = `${escapeHtml(cached.full_name)}${verifiedBadgeHtml(cached)}`;
             accountModalUsername.textContent = cached.username ? `@${cached.username}` : "";
         }
-        accountChatBtn.hidden = userId === CURRENT_USER_ID;
-        accountFollowBtn.hidden = userId === CURRENT_USER_ID;
+        renderAccountModalOwnState(isOwn);
 
         accountModalBackdrop.hidden = false;
         openOverlay("accountModal", closeAccountModal);
@@ -4432,8 +4453,7 @@
             accountModalUsername.textContent = `@${user.username}`;
             accountFollowerCount.textContent = user.follower_count;
             accountFollowingCount.textContent = user.following_count;
-            accountChatBtn.hidden = user.is_own;
-            accountFollowBtn.hidden = user.is_own;
+            renderAccountModalOwnState(user.is_own);
             if (!user.is_own) renderFollowBtn(user.is_following);
         } catch (err) { /* keep showing the cached snapshot */ }
     }
@@ -4475,11 +4495,15 @@
         finally { accountFollowBtn.disabled = false; }
     });
 
+    // These sit on your own account page in place of Chat/Follow — same
+    // actions the old avatar popover menu offered, just relocated.
+    accountEditProfileBtn.addEventListener("click", () => openProfileModal());
+    accountLogoutBtn.addEventListener("click", () => logOut());
+
     // ---------------------------------------------------------------
     // Profile modal — edit display name and profile picture
     // ---------------------------------------------------------------
     const profileModalBackdrop = document.getElementById("profileModalBackdrop");
-    const openProfileBtn = document.getElementById("openProfileBtn");
     const closeProfileBtn = document.getElementById("closeProfileBtn");
     const profileFullNameInput = document.getElementById("profileFullName");
     const profilePicInput = document.getElementById("profilePicInput");
@@ -4488,12 +4512,11 @@
     const profileError = document.getElementById("profileError");
     const profileSuccess = document.getElementById("profileSuccess");
     const ownAvatar = document.getElementById("ownAvatar");
-    const ownFullName = document.getElementById("ownFullName");
 
     function openProfileModal() {
         profileError.hidden = true;
         profileSuccess.hidden = true;
-        profileFullNameInput.value = ownFullName.textContent.trim();
+        profileFullNameInput.value = CURRENT_USER_IDENTITY.full_name;
         profileAvatarPreview.src = ownAvatar.src;
         profileModalBackdrop.hidden = false;
         openOverlay("profileModal", closeProfileModal);
@@ -4512,42 +4535,15 @@
     });
 
     // ---------------------------------------------------------------
-    // Profile icon menu — clicking the avatar/name in the sidebar footer
-    // pops open "Edit profile" and "Log out" instead of a bare icon
-    // sitting loose in the sidebar.
+    // Profile icon — tapping the avatar in the top bar now opens the
+    // full-screen account page (openAccountModal, defined above) for your
+    // own account, the same page used for everyone else's profile, instead
+    // of popping open a small dropdown. "Edit profile" and "Log out" live
+    // on that page now (see accountEditProfileBtn/accountLogoutBtn above).
     // ---------------------------------------------------------------
     const profileMenuBtn = document.getElementById("profileMenuBtn");
-    const profileMenu = document.getElementById("profileMenu");
 
-    function openProfileMenu() {
-        profileMenu.hidden = false;
-        profileMenuBtn.setAttribute("aria-expanded", "true");
-    }
-
-    function closeProfileMenu() {
-        profileMenu.hidden = true;
-        profileMenuBtn.setAttribute("aria-expanded", "false");
-    }
-
-    profileMenuBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (profileMenu.hidden) openProfileMenu(); else closeProfileMenu();
-    });
-
-    document.addEventListener("click", (e) => {
-        if (!profileMenu.hidden && !profileMenu.contains(e.target) && e.target !== profileMenuBtn) {
-            closeProfileMenu();
-        }
-    });
-
-    document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape" && !profileMenu.hidden) closeProfileMenu();
-    });
-
-    openProfileBtn.addEventListener("click", () => {
-        closeProfileMenu();
-        openProfileModal();
-    });
+    profileMenuBtn.addEventListener("click", () => openAccountModal(CURRENT_USER_ID));
 
     // Picking a new file uploads immediately (matches the "tap avatar to
     // change it" pattern people expect), then refreshes every avatar shown
@@ -4627,12 +4623,13 @@
     });
 
     // ---------------------------------------------------------------
-    // Logout
+    // Logout — triggered from the Log out button on your own account page
+    // (accountLogoutBtn, wired up above).
     // ---------------------------------------------------------------
-    document.getElementById("logoutBtn").addEventListener("click", async () => {
+    async function logOut() {
         socket.disconnect();
         await fetch("/api/logout", { method: "POST" });
         window.location.href = "/login";
-    });
+    }
 </script>
 {% endblock %}
