@@ -184,6 +184,14 @@ app.config["SECRET_KEY"] = _secret_key
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
     "DATABASE_URL", f"sqlite:///{os.path.join(BASE_DIR, 'chat.db')}"
 )
+# Neon, and several other Postgres providers, hand out connection strings
+# starting with "postgres://" — a legacy scheme SQLAlchemy 2.x no longer
+# accepts (it requires "postgresql://"). Normalize it so pasting a
+# provider's URL straight into DATABASE_URL just works.
+if app.config["SQLALCHEMY_DATABASE_URI"].startswith("postgres://"):
+    app.config["SQLALCHEMY_DATABASE_URI"] = app.config["SQLALCHEMY_DATABASE_URI"].replace(
+        "postgres://", "postgresql://", 1
+    )
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True}
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
