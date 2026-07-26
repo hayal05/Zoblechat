@@ -1893,7 +1893,8 @@ span.feed-card-name.feed-card-account-trigger:hover { text-decoration: underline
 .account-modal-stats strong { color: var(--ink); font-weight: 800; }
 .account-modal-actions { display: flex; gap: 10px; width: 100%; }
 .account-modal-actions .btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; }
-.account-chat-btn[hidden], .account-follow-btn[hidden] { display: none; }
+.account-chat-btn[hidden], .account-follow-btn[hidden],
+.account-edit-btn[hidden], .account-logout-btn[hidden] { display: none; }
 
 /* Text sits above the picture — same reading order as the composer,
    and the same order a normal feed post is written in. */
