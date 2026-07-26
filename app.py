@@ -17,6 +17,7 @@ import re
 import time
 import uuid
 import json
+import base64
 import hashlib
 import secrets
 import logging
@@ -361,6 +362,44 @@ class User(db.Model, UserMixin):
 
     def __repr__(self):
         return f"<User {self.username}>"
+
+
+class PasswordReset(db.Model):
+    """A password reset in progress. Same shape/lifecycle as
+    PendingRegistration's OTP flow: /api/password-reset/start emails a
+    6-digit code and stores it here (keyed by the account's email);
+    /api/password-reset/verify checks the code and, only if it matches,
+    updates the real User row's password_hash in the same request. Kept
+    in the database (not an in-memory dict) so an in-progress reset
+    survives a worker restart between the two requests.
+
+    One row per email — starting a new reset for an email that already
+    has a row in progress replaces it, so an abandoned attempt can never
+    block a retry.
+    """
+    __tablename__ = "password_resets"
+
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    otp_code = db.Column(db.String(OTP_LENGTH), nullable=False)
+    otp_expires_at = db.Column(db.DateTime, nullable=False)
+    # Wrong-code guesses against this row. Hitting OTP_MAX_ATTEMPTS forces a
+    # fresh code (see /api/password-reset/verify) instead of allowing
+    # unlimited brute-force attempts against a 6-digit space.
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    # Backs the resend cooldown — /api/password-reset/resend refuses to
+    # fire off another email until OTP_RESEND_COOLDOWN_SECONDS after this.
+    last_sent_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    user = db.relationship("User")
+
+    def is_expired(self):
+        return datetime.utcnow() > self.otp_expires_at
+
+    def __repr__(self):
+        return f"<PasswordReset {self.email}>"
 
 
 class PendingRegistration(db.Model):
@@ -728,6 +767,26 @@ class Group(db.Model):
     def to_dict(self, viewer_id=None):
         member_rows = self.members.order_by(GroupMember.joined_at.asc()).all()
         last_message = self.messages.order_by(GroupMessage.timestamp.desc()).first()
+
+        # Mirrors the 1:1 sidebar's Message.is_read-based unread_count: how
+        # many messages in this group the viewer hasn't seen yet, judged
+        # against their own GroupMember.last_read_at watermark (the same
+        # field GroupMessage.to_dict() uses for its per-message "is_read").
+        # A viewer who has never opened the group (last_read_at is None)
+        # has everyone else's messages unread; a non-member (or anonymous
+        # caller) gets 0 rather than a query against a watermark that
+        # doesn't exist for them.
+        unread_count = 0
+        if viewer_id is not None:
+            viewer_member = next((m for m in member_rows if m.user_id == viewer_id), None)
+            if viewer_member is not None:
+                unread_query = self.messages.filter(GroupMessage.sender_id != viewer_id)
+                if viewer_member.last_read_at is not None:
+                    unread_query = unread_query.filter(
+                        GroupMessage.timestamp > viewer_member.last_read_at
+                    )
+                unread_count = unread_query.count()
+
         return {
             "id": self.id,
             "name": self.name,
@@ -740,6 +799,7 @@ class Group(db.Model):
                 (m.role for m in member_rows if m.user_id == viewer_id), None
             ) if viewer_id is not None else None,
             "last_message": last_message.to_dict() if last_message else None,
+            "unread_count": unread_count,
         }
 
     def __repr__(self):
@@ -1170,9 +1230,44 @@ def send_otp_email(to_email, code, full_name):
         f"This code expires in {OTP_EXPIRY_MINUTES} minutes. If you didn't "
         f"try to sign up for Zoble, you can ignore this email.\n"
     )
+    _send_brevo_email(to_email, subject, text_body, dev_log_label="Verification", dev_log_code=code)
 
+
+def send_password_reset_email(to_email, code, full_name):
+    """Emails a password-reset code via the same Brevo HTTP API as
+    send_otp_email above — identical delivery mechanics, just a distinct
+    subject/body so a reset code can never be mistaken for a signup
+    verification code, and a reassurance line for the (common) case where
+    someone else typed in this email address by mistake and the real
+    owner never asked for a reset.
+
+    Raises on a genuine send failure so the caller can surface a real
+    error instead of leaving the person stuck waiting on an email that
+    never arrives.
+    """
+    subject = "Your Zoble password reset code"
+    text_body = (
+        f"Hi {full_name},\n\n"
+        f"Your Zoble password reset code is: {code}\n\n"
+        f"This code expires in {OTP_EXPIRY_MINUTES} minutes. If you didn't "
+        f"request a password reset, you can safely ignore this email — "
+        f"your password won't be changed.\n"
+    )
+    _send_brevo_email(to_email, subject, text_body, dev_log_label="Password reset", dev_log_code=code)
+
+
+def _send_brevo_email(to_email, subject, text_body, dev_log_label, dev_log_code):
+    """Shared HTTP-sending mechanics behind send_otp_email and
+    send_password_reset_email above — falls back to just logging the code
+    when BREVO_API_KEY isn't configured, so local development and this
+    project's own tests can exercise either flow without a real API key
+    (see the BREVO_* constants above).
+    """
     if not BREVO_API_KEY or not BREVO_FROM_EMAIL:
-        logger.info("[DEV] Verification code for %s: %s (no BREVO_API_KEY/BREVO_FROM_EMAIL configured)", to_email, code)
+        logger.info(
+            "[DEV] %s code for %s: %s (no BREVO_API_KEY/BREVO_FROM_EMAIL configured)",
+            dev_log_label, to_email, dev_log_code,
+        )
         return
 
     payload = json.dumps({
@@ -1344,6 +1439,69 @@ def cloudinary_mirror_delete(relative_path):
         )
     except requests.RequestException:
         logger.exception("Cloudinary mirror delete failed for %s", relative_path)
+
+
+@app.route("/api/debug/cloudinary-status", methods=["GET"])
+@login_required
+def cloudinary_status():
+    """Admin-only live health check for the photo-persistence fallback.
+
+    Reports which of the three CLOUDINARY_* env vars are actually set
+    (without leaking their values), then — if all three are present —
+    performs one real signed upload + delete round trip against
+    Cloudinary's API using a tiny 1x1 pixel throwaway image, so a bad
+    API key/secret or an unreachable account shows up here as a clear
+    error message instead of only ever surfacing as "photos vanished
+    after the next disk wipe" with no visible cause.
+    """
+    if not current_user.is_admin:
+        return jsonify({"error": "Admin access required."}), 403
+
+    status = {
+        "cloud_name_set": bool(CLOUDINARY_CLOUD_NAME),
+        "api_key_set": bool(CLOUDINARY_API_KEY),
+        "api_secret_set": bool(CLOUDINARY_API_SECRET),
+        "configured": CLOUDINARY_CONFIGURED,
+        "test_upload": None,
+    }
+
+    if not CLOUDINARY_CONFIGURED:
+        status["test_upload"] = "skipped — one or more env vars are unset, see above"
+        return jsonify(status), 200
+
+    # Smallest possible valid PNG (1x1 transparent pixel) — real bytes,
+    # not a placeholder, so Cloudinary's upload validation has something
+    # legitimate to accept rather than rejecting empty/garbage content.
+    test_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    test_public_id = f"zoble/debug/connectivity_check_{int(time.time())}"
+    timestamp = int(time.time())
+    signature = _cloudinary_signature({"public_id": test_public_id, "timestamp": timestamp})
+
+    try:
+        resp = requests.post(
+            f"https://api.cloudinary.com/v1_1/{CLOUDINARY_CLOUD_NAME}/image/upload",
+            data={
+                "api_key": CLOUDINARY_API_KEY,
+                "timestamp": timestamp,
+                "public_id": test_public_id,
+                "signature": signature,
+            },
+            files={"file": ("test.png", test_png, "image/png")},
+            timeout=15,
+        )
+        if resp.ok:
+            status["test_upload"] = "ok — Cloudinary accepted the test upload"
+        else:
+            status["test_upload"] = f"FAILED — HTTP {resp.status_code}: {resp.text[:500]}"
+    except requests.RequestException as e:
+        status["test_upload"] = f"FAILED — could not reach Cloudinary: {e}"
+    else:
+        # Clean up the test file either way we don't care about; best-effort.
+        cloudinary_mirror_delete(f"debug/{os.path.basename(test_public_id)}.png")
+
+    return jsonify(status), 200
 
 
 @app.route("/static/uploads/<path:filename>")
@@ -1730,6 +1888,13 @@ def register_page():
     return _no_store(render_template("register.html"))
 
 
+@app.route("/forgot-password")
+def forgot_password_page():
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
+    return _no_store(render_template("forgot_password.html"))
+
+
 # -------------------------------------------------------------------
 # Authentication API Routes (JSON)
 # -------------------------------------------------------------------
@@ -1903,6 +2068,166 @@ def register_verify():
     login_user(user)
     logger.info("New user registered (email verified): %s", user.username)
     return jsonify({"message": "Registered successfully.", "user": user.to_dict(include_email=True)}), 201
+
+
+@app.route("/api/password-reset/start", methods=["POST"])
+@limiter.limit("6 per hour")
+def password_reset_start():
+    """Step 1 of password reset: emails a 6-digit code if — and only
+    if — the address belongs to a real account. Always returns the same
+    generic success message either way (unlike /api/register/start, which
+    can safely reveal "that email is taken" because that's not a login
+    credential) so this endpoint can't be used to check which emails have
+    a Zoble account."""
+    data = request.get_json(silent=True) or request.form
+    email = (data.get("email") or "").strip().lower()
+
+    email_error = validate_email(email)
+    if email_error:
+        return jsonify({"error": email_error}), 400
+
+    generic_response = jsonify({
+        "message": "If an account exists for that email, a reset code has been sent.",
+        "email": email,
+        "expires_in_minutes": OTP_EXPIRY_MINUTES,
+    })
+
+    user = User.query.filter(func.lower(User.email) == email).first()
+    if not user:
+        # No account — say nothing further, but still look and feel like
+        # a success response so the timing/shape can't be used to probe.
+        return generic_response, 200
+
+    now = datetime.utcnow()
+    code = generate_otp_code()
+
+    try:
+        send_password_reset_email(email, code, user.full_name)
+    except Exception:
+        logger.exception("Failed to send password reset email to %s", email)
+        return jsonify({"error": "Could not send reset email. Please try again."}), 502
+
+    try:
+        reset = PasswordReset.query.filter_by(email=email).first()
+        if reset is None:
+            reset = PasswordReset(email=email, user_id=user.id)
+            db.session.add(reset)
+
+        reset.user_id = user.id
+        reset.otp_code = code
+        reset.otp_expires_at = now + timedelta(minutes=OTP_EXPIRY_MINUTES)
+        reset.attempts = 0
+        reset.last_sent_at = now
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to store password reset request for %s", email)
+        return jsonify({"error": "Something went wrong. Please try again."}), 500
+
+    logger.info("Password reset code sent for: %s", email)
+    return generic_response, 200
+
+
+@app.route("/api/password-reset/resend", methods=["POST"])
+@limiter.limit("6 per hour")
+def password_reset_resend():
+    """Re-sends a fresh code for an in-progress reset, subject to the same
+    short cooldown as /api/register/resend. Only ever called after the
+    person already went through /start with this exact email, so — same
+    as register_resend — confirming whether a row exists here doesn't
+    leak anything new."""
+    data = request.get_json(silent=True) or request.form
+    email = (data.get("email") or "").strip().lower()
+
+    reset = PasswordReset.query.filter_by(email=email).first()
+    if not reset:
+        return jsonify({"error": "No pending reset found for that email. Please start over."}), 404
+
+    seconds_since_last_send = (datetime.utcnow() - reset.last_sent_at).total_seconds()
+    if seconds_since_last_send < OTP_RESEND_COOLDOWN_SECONDS:
+        wait = int(OTP_RESEND_COOLDOWN_SECONDS - seconds_since_last_send)
+        return jsonify({"error": f"Please wait {wait}s before requesting another code.", "retry_after": wait}), 429
+
+    code = generate_otp_code()
+    try:
+        send_password_reset_email(email, code, reset.user.full_name if reset.user else "")
+    except Exception:
+        logger.exception("Failed to resend password reset email to %s", email)
+        return jsonify({"error": "Could not send reset email. Please try again."}), 502
+
+    try:
+        reset.otp_code = code
+        reset.otp_expires_at = datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
+        reset.attempts = 0
+        reset.last_sent_at = datetime.utcnow()
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to update password reset request for %s", email)
+        return jsonify({"error": "Something went wrong. Please try again."}), 500
+
+    return jsonify({"message": "Reset code sent.", "expires_in_minutes": OTP_EXPIRY_MINUTES}), 200
+
+
+@app.route("/api/password-reset/verify", methods=["POST"])
+@limiter.limit("20 per hour")
+def password_reset_verify():
+    """Step 2 of password reset: checks the emailed code and, only once
+    it's correct, sets the account's new password in this same request —
+    a one-shot code rather than issuing a separate reset token, same
+    trust model as /api/register/verify's code-completes-the-action
+    design."""
+    data = request.get_json(silent=True) or request.form
+    email = (data.get("email") or "").strip().lower()
+    code = (data.get("code") or "").strip()
+    new_password = data.get("new_password") or ""
+
+    reset = PasswordReset.query.filter_by(email=email).first()
+    if not reset:
+        return jsonify({"error": "No pending reset found for that email. Please start over."}), 404
+
+    if reset.is_expired():
+        db.session.delete(reset)
+        db.session.commit()
+        return jsonify({"error": "That code has expired. Please request a new one."}), 410
+
+    if reset.attempts >= OTP_MAX_ATTEMPTS:
+        db.session.delete(reset)
+        db.session.commit()
+        return jsonify({"error": "Too many incorrect attempts. Please request a new code."}), 429
+
+    if not code or code != reset.otp_code:
+        reset.attempts += 1
+        db.session.commit()
+        remaining = max(OTP_MAX_ATTEMPTS - reset.attempts, 0)
+        return jsonify({"error": "Incorrect code.", "attempts_remaining": remaining}), 400
+
+    password_error = validate_password(new_password)
+    if password_error:
+        return jsonify({"error": password_error}), 400
+
+    user = User.query.get(reset.user_id)
+    if not user:
+        # The account was deleted mid-reset — vanishingly rare, but leave
+        # nothing dangling.
+        db.session.delete(reset)
+        db.session.commit()
+        return jsonify({"error": "That account no longer exists."}), 404
+
+    try:
+        user.set_password(new_password)
+        db.session.delete(reset)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to update password after OTP verification for %s", email)
+        return jsonify({"error": "Could not reset password. Please try again."}), 500
+
+    # Deliberately not logging the person in here (unlike register_verify) —
+    # a password reset is exactly the moment to make sure the next session
+    # starts with a fresh, explicit login using the new password.
+    logger.info("Password reset completed for: %s", user.username)
+    return jsonify({"message": "Password reset successfully."}), 200
 
 
 @app.route("/api/login", methods=["POST"])
@@ -2154,6 +2479,33 @@ def get_user_account_page(user_id):
         and Follow.query.filter_by(follower_id=current_user.id, followed_id=user.id).first() is not None
     )
     return jsonify({"user": data}), 200
+
+
+@app.route("/api/users/<int:user_id>/posts", methods=["GET"])
+@login_required
+def list_user_posts(user_id):
+    """Cursor-paginated, same shape/pagination as GET /api/posts, but scoped
+    to a single account — this is what fills the post list on the account
+    page opened by tapping a name/avatar in the news feed. Pass
+    ?before_id=<id> for the next older page. Includes that user's reposts
+    (each is its own Post row), same as the main feed, so the account page
+    reflects everything they've shared, not just what they originally wrote."""
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "User not found."}), 404
+
+    before_id = request.args.get("before_id", type=int)
+
+    query = Post.query.filter_by(user_id=user_id)
+    if before_id:
+        query = query.filter(Post.id < before_id)
+
+    posts = query.order_by(Post.id.desc()).limit(POST_FEED_PAGE_SIZE).all()
+
+    return jsonify({
+        "posts": [p.to_dict(viewer_id=current_user.id) for p in posts],
+        "has_more": len(posts) == POST_FEED_PAGE_SIZE,
+    }), 200
 
 
 @app.route("/api/users/<int:user_id>/follow", methods=["POST"])
