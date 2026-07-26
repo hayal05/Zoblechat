@@ -59,6 +59,29 @@
                 <span class="feed-unread-badge" id="feedUnreadBadge" hidden></span>
             </button>
 
+            <!-- Notifications — bell with a live unread counter, opens a
+                 dropdown panel of recent activity (follows, likes,
+                 comments, shares, reactions, group invites). -->
+            <div class="notif-wrap">
+                <button class="btn-icon feed-nav-btn" id="notifNavBtn" type="button" title="Notifications" aria-haspopup="true" aria-expanded="false">
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                    </svg>
+                    <span class="feed-unread-badge" id="notifUnreadBadge" hidden></span>
+                </button>
+
+                <div class="notif-panel" id="notifPanel" hidden>
+                    <div class="notif-panel-header">
+                        <span>Notifications</span>
+                    </div>
+                    <div class="notif-panel-list" id="notifList">
+                        <!-- Populated by JS -->
+                    </div>
+                    <p class="notif-panel-empty" id="notifEmpty" hidden>No notifications yet.</p>
+                </div>
+            </div>
+
             <!-- Profile now lives top-right, level with the search bar -->
             <div class="profile-avatar-wrap">
                 <button class="profile-avatar-btn" id="profileMenuBtn" type="button" title="Account menu" aria-haspopup="true" aria-expanded="false">
@@ -646,6 +669,7 @@
         is_admin: {{ 'true' if current_user_data.is_admin else 'false' }},
     };
     const FEED_UNREAD_COUNT_INITIAL = {{ feed_unread_count }};
+    const NOTIF_UNREAD_COUNT_INITIAL = {{ notifications_unread_count }};
 
     const appShell = document.querySelector(".app-shell");
     const chatList = document.getElementById("chatList");
@@ -837,6 +861,7 @@
         const row = document.createElement("div");
         row.className = "msg-row " + (outgoing ? "outgoing" : "incoming") + (animate ? " msg-enter" : "");
         row.dataset.messageId = msg.id;
+        row.dataset.conversationType = "user";
         if (outgoing) {
             row.dataset.recipientId = msg.recipient_id;
             row.dataset.read = msg.is_read ? "true" : "false";
@@ -912,19 +937,26 @@
         if (row) renderMessageReactions(row, reactions);
     }
 
-    async function sendReaction(messageId, emoji) {
+    async function sendReaction(messageId, emoji, conversationType) {
+        // conversationType is "group" for a GroupMessage, anything else
+        // (including undefined, for older callers) means a 1:1 Message —
+        // same toggle semantics either way, just a different endpoint/room.
+        const endpoint = conversationType === "group"
+            ? `/api/groups/messages/${messageId}/react`
+            : `/api/messages/${messageId}/react`;
         try {
-            const res = await fetch(`/api/messages/${messageId}/react`, {
+            const res = await fetch(endpoint, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ emoji }),
             });
             if (!res.ok) return;
             const data = await res.json();
-            // The server also broadcasts this over Socket.IO ("message_reacted")
-            // to both participants' rooms, including our own — but we update
-            // this tab immediately here too, so it feels instant rather than
-            // waiting on the round trip through the socket.
+            // The server also broadcasts this over Socket.IO ("message_reacted"
+            // / "group_message_reacted") to everyone in the conversation,
+            // including our own other tabs — but we update this tab
+            // immediately here too, so it feels instant rather than waiting
+            // on the round trip through the socket.
             updateMessageReactions(messageId, data.reactions);
         } catch (err) {
             // Reactions are a light-touch feature — silently drop network
@@ -943,9 +975,11 @@
     document.body.appendChild(reactionPicker);
 
     let reactionPickerMessageId = null;
+    let reactionPickerConversationType = null;
 
-    function openReactionPicker(triggerEl, messageId) {
+    function openReactionPicker(triggerEl, messageId, conversationType) {
         reactionPickerMessageId = messageId;
+        reactionPickerConversationType = conversationType;
         reactionPicker.hidden = false;
         const rect = triggerEl.getBoundingClientRect();
         const pickerRect = reactionPicker.getBoundingClientRect();
@@ -965,7 +999,7 @@
     reactionPicker.addEventListener("click", (e) => {
         const option = e.target.closest(".reaction-picker-option");
         if (!option || reactionPickerMessageId === null) return;
-        sendReaction(reactionPickerMessageId, option.dataset.emoji);
+        sendReaction(reactionPickerMessageId, option.dataset.emoji, reactionPickerConversationType);
         closeReactionPicker();
     });
 
@@ -976,7 +1010,7 @@
             if (reactionPickerMessageId === row.dataset.messageId) {
                 closeReactionPicker();
             } else {
-                openReactionPicker(trigger, row.dataset.messageId);
+                openReactionPicker(trigger, row.dataset.messageId, row.dataset.conversationType);
             }
             return;
         }
@@ -986,7 +1020,7 @@
             // Tapping a pill re-sends that same emoji: if it's already your
             // reaction this removes it (server toggle semantics), otherwise
             // it adds/swaps to it — same as picking it from the picker.
-            sendReaction(row.dataset.messageId, pill.dataset.emoji);
+            sendReaction(row.dataset.messageId, pill.dataset.emoji, row.dataset.conversationType);
         }
     });
 
@@ -2266,6 +2300,181 @@
     renderOnlineList(); // seed the count badge on load
 
     // ---------------------------------------------------------------
+    // Notifications — bell icon next to the news feed icon, with a
+    // live badge counter. Backed by GET /api/notifications (paginated
+    // list) + POST /api/notifications/mark-seen (opening the panel
+    // marks everything read, same "viewing it clears it" idea as the
+    // feed badge). Live updates arrive over Socket.IO via
+    // "new_notification" — that listener is registered further down
+    // alongside the rest of the socket.on(...) handlers, once `socket`
+    // itself has been created.
+    // ---------------------------------------------------------------
+    const notifNavBtn = document.getElementById("notifNavBtn");
+    const notifUnreadBadge = document.getElementById("notifUnreadBadge");
+    const notifPanel = document.getElementById("notifPanel");
+    const notifList = document.getElementById("notifList");
+    const notifEmpty = document.getElementById("notifEmpty");
+
+    let notifUnreadCount = NOTIF_UNREAD_COUNT_INITIAL;
+    let notifications = [];
+    let notifLoadedOnce = false;
+    let notifLoadingMore = false;
+    let notifHasMore = true;
+
+    // Same "10+" cap/style as the feed's unread badge (renderFeedUnreadBadge)
+    // — a small icon-overlay badge, not a full unread counter.
+    function renderNotifUnreadBadge() {
+        if (notifUnreadCount <= 0) {
+            notifUnreadBadge.hidden = true;
+            return;
+        }
+        notifUnreadBadge.hidden = false;
+        notifUnreadBadge.textContent = notifUnreadCount > 10 ? "10+" : String(notifUnreadCount);
+    }
+
+    function bumpNotifUnreadBadge() {
+        notifUnreadCount += 1;
+        renderNotifUnreadBadge();
+        notifUnreadBadge.classList.remove("badge-pop");
+        void notifUnreadBadge.offsetWidth; // restart animation
+        notifUnreadBadge.classList.add("badge-pop");
+    }
+
+    renderNotifUnreadBadge(); // seed from the server-rendered count on load
+
+    const NOTIF_ICON_BY_TYPE = {
+        follow: "👤",
+        post_like: "❤️",
+        post_comment: "💬",
+        post_share: "🔁",
+        story_reaction: "❤️",
+        message_reaction: "😊",
+        group_message_reaction: "😊",
+        group_added: "👥",
+    };
+
+    function buildNotifRow(n) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "notif-row" + (n.is_read ? "" : " unread");
+        row.dataset.notificationId = n.id;
+        row.dataset.type = n.type;
+        if (n.actor_id != null) row.dataset.actorId = n.actor_id;
+        if (n.group_id != null) row.dataset.groupId = n.group_id;
+
+        const icon = NOTIF_ICON_BY_TYPE[n.type] || "🔔";
+        const name = escapeHtml(n.actor_full_name || n.actor_username || "Someone");
+
+        row.innerHTML = `
+            <span class="notif-row-dot"></span>
+            <span class="notif-row-body">
+                <span class="notif-row-text">${icon} <strong>${name}</strong> ${escapeHtml(n.text)}</span>
+                <span class="notif-row-time">${feedTimeAgo(n.created_at)}</span>
+            </span>`;
+        return row;
+    }
+
+    function renderNotifEmptyState() {
+        notifEmpty.hidden = notifications.length > 0;
+    }
+
+    async function loadNotifPage(reset) {
+        if (notifLoadingMore) return;
+        if (!reset && !notifHasMore) return;
+        notifLoadingMore = true;
+
+        if (reset) {
+            notifications = [];
+            notifList.innerHTML = "";
+            notifHasMore = true;
+        }
+
+        try {
+            const lastId = notifications.length ? notifications[notifications.length - 1].id : "";
+            const url = lastId ? `/api/notifications?before_id=${lastId}` : "/api/notifications";
+            const res = await fetch(url);
+            if (!res.ok) return;
+            const data = await res.json();
+            notifHasMore = !!data.has_more;
+            (data.notifications || []).forEach((n) => {
+                notifications.push(n);
+                notifList.appendChild(buildNotifRow(n));
+            });
+            renderNotifEmptyState();
+        } catch (err) {
+            // Fails quietly, same as the feed's page loader.
+        } finally {
+            notifLoadingMore = false;
+        }
+    }
+
+    async function markNotificationsSeen() {
+        if (notifUnreadCount === 0) return;
+        notifUnreadCount = 0;
+        renderNotifUnreadBadge();
+        notifList.querySelectorAll(".notif-row.unread").forEach((row) => row.classList.remove("unread"));
+        try {
+            await fetch("/api/notifications/mark-seen", { method: "POST" });
+        } catch (err) {
+            // Badge already cleared locally — worst case the server-side
+            // rows catch up next time this succeeds.
+        }
+    }
+
+    function openNotifPanel() {
+        notifPanel.hidden = false;
+        notifNavBtn.setAttribute("aria-expanded", "true");
+        if (!notifLoadedOnce) {
+            notifLoadedOnce = true;
+            loadNotifPage(true);
+        }
+        markNotificationsSeen();
+    }
+
+    function closeNotifPanel() {
+        notifPanel.hidden = true;
+        notifNavBtn.setAttribute("aria-expanded", "false");
+    }
+
+    notifNavBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (notifPanel.hidden) openNotifPanel(); else closeNotifPanel();
+    });
+
+    document.addEventListener("click", (e) => {
+        if (!notifPanel.hidden && !notifPanel.contains(e.target) && !notifNavBtn.contains(e.target)) {
+            closeNotifPanel();
+        }
+    });
+
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !notifPanel.hidden) closeNotifPanel();
+    });
+
+    notifList.addEventListener("scroll", () => {
+        if (notifList.scrollTop + notifList.clientHeight >= notifList.scrollHeight - 80) {
+            loadNotifPage(false);
+        }
+    });
+
+    // Tapping a row jumps to the relevant place: the actor's profile for
+    // most types, or straight into the group conversation for a
+    // "added you to a group" notification.
+    notifList.addEventListener("click", (e) => {
+        const row = e.target.closest(".notif-row");
+        if (!row) return;
+        closeNotifPanel();
+        if (row.dataset.type === "group_added" && row.dataset.groupId) {
+            const groupId = parseInt(row.dataset.groupId, 10);
+            if (getGroup(groupId)) openGroupConversation(groupId);
+            return;
+        }
+        if (row.dataset.actorId) {
+            openAccountModal(parseInt(row.dataset.actorId, 10));
+        }
+    });
+
+    // ---------------------------------------------------------------
     // Groups — live group messaging (text + photo), backed by
     // GET/POST /api/groups + GET /api/groups/<id> for state, and the
     // send_group_message / new_group_message Socket.IO event pair for
@@ -2571,34 +2780,51 @@
     }
 
     // msg fields match GroupMessage.to_dict() from the server: sender_id,
-    // sender_full_name, message_type, image_url, content, timestamp.
+    // sender_full_name, message_type, image_url, content, timestamp, plus
+    // is_read and reactions — same two fields 1:1 messages carry, so this
+    // renders with the exact same bubble markup, read-receipt ticks, and
+    // reaction bar/picker as appendMessage() below, just with an added
+    // sender-name label on incoming messages (since a group has more than
+    // one other participant).
     function renderGroupMessage(msg, animate) {
         const outgoing = msg.sender_id === CURRENT_USER_ID;
         const row = document.createElement("div");
         row.className = "msg-row " + (outgoing ? "outgoing" : "incoming") + (animate ? " msg-enter" : "");
         row.dataset.messageId = msg.id;
+        row.dataset.conversationType = "group";
+        row.dataset.groupId = msg.group_id;
+        if (outgoing) {
+            row.dataset.read = msg.is_read ? "true" : "false";
+        }
 
         const isPhoto = msg.message_type === "image" && msg.image_url;
         const senderLabel = outgoing ? "" : `<span class="group-msg-sender">${escapeHtml(msg.sender_full_name || "Member")}</span>`;
+        const statusHtml = outgoing ? renderMessageStatus(!!msg.is_read, isPhoto) : "";
 
         const bubbleHtml = isPhoto
             ? `<div class="msg-bubble msg-bubble-photo">
                    <img class="msg-photo" src="${msg.image_url}" alt="Shared photo" loading="lazy">
                    <span class="msg-meta">
                        <span class="msg-time msg-time-photo">${formatTime(msg.timestamp)}</span>
+                       ${statusHtml}
                    </span>
                </div>`
             : `<div class="msg-bubble">
                    ${escapeHtml(msg.content)}
                    <span class="msg-meta">
                        <span class="msg-time">${formatTime(msg.timestamp)}</span>
+                       ${statusHtml}
                    </span>
                </div>`;
 
         row.innerHTML = `
             <div class="msg-stack">
                 ${senderLabel}
-                <div class="msg-bubble-group">${bubbleHtml}</div>
+                <div class="msg-bubble-group">
+                    <button type="button" class="msg-react-trigger" aria-label="React to this message">${REACT_TRIGGER_ICON}</button>
+                    ${bubbleHtml}
+                </div>
+                <div class="msg-reactions-bar"></div>
             </div>`;
 
         if (isPhoto) {
@@ -2606,6 +2832,7 @@
         }
 
         messagesScroll.appendChild(row);
+        renderMessageReactions(row, msg.reactions || []);
     }
 
     async function openGroupConversation(groupId) {
@@ -2666,6 +2893,10 @@
 
         if (socket.connected) {
             socket.emit("join_group", { group_id: group.id });
+            // We're actively viewing this group now — stamp our read
+            // watermark so senders' outgoing ticks flip to "read" (mirrors
+            // the "mark_read" emit 1:1 chat does on open/on new message).
+            socket.emit("mark_group_read", { group_id: group.id });
         }
     }
 
@@ -3746,6 +3977,12 @@
             group.messages.push(msg);
             renderGroupMessage(msg, true);
             scrollMessagesToBottom(true);
+            if (msg.sender_id !== CURRENT_USER_ID && socket.connected) {
+                // We're looking right at this group when the message came
+                // in — tell the server it's read immediately, same as the
+                // 1:1 "mark_read" emit inside receive_message above.
+                socket.emit("mark_group_read", { group_id: group.id });
+            }
         } else if (group.messages !== null) {
             group.messages.push(msg);
         }
@@ -3755,6 +3992,68 @@
         }
 
         renderGroupsList();
+    });
+
+    // Group read receipts — a member other than us just opened the group
+    // (or we did, from another tab), so re-check which of our own
+    // outgoing messages now count as "read by everyone" and flip their
+    // ticks live. Re-fetching is simplest/most correct here since "read"
+    // for a group message depends on *every other* member's watermark,
+    // not just the one reader this event names.
+    socket.on("group_messages_seen", async (payload) => {
+        if (!payload || payload.group_id == null) return;
+        const group = getGroup(payload.group_id);
+        if (!group || !group.messages) return;
+
+        try {
+            const res = await fetch(`/api/groups/${payload.group_id}`);
+            if (!res.ok) return;
+            const data = await res.json();
+            const freshById = new Map((data.group.messages || []).map(m => [m.id, m.is_read]));
+            group.messages.forEach(m => {
+                if (freshById.has(m.id)) m.is_read = freshById.get(m.id);
+            });
+            if (activeConversationType === "group" && activeGroupId === payload.group_id) {
+                freshById.forEach((isRead, messageId) => {
+                    if (isRead) markGroupMessageRead(messageId);
+                });
+            }
+        } catch (err) {
+            // Best-effort live update — a stale tick will correct itself
+            // next time the group is reopened.
+        }
+    });
+
+    function markGroupMessageRead(messageId) {
+        const row = messagesScroll.querySelector(
+            `.msg-row.outgoing[data-conversation-type="group"][data-message-id="${messageId}"][data-read="false"]`
+        );
+        if (!row) return;
+        row.dataset.read = "true";
+        const statusEl = row.querySelector(".msg-status");
+        if (!statusEl) return;
+        statusEl.classList.add("read");
+        statusEl.title = "Read";
+        statusEl.innerHTML = MSG_STATUS_TICK_SVG + MSG_STATUS_TICK_SVG;
+    }
+
+    socket.on("group_message_reacted", (payload) => {
+        // Covers reactions from other members, and from our own other open
+        // tabs — this tab's own reacts already update instantly via
+        // sendReaction()'s response.
+        updateMessageReactions(payload.message_id, payload.reactions);
+    });
+
+    // Notifications — a like/comment/share/follow/reaction/group-add
+    // elsewhere just fired create_notification() server-side; push it
+    // straight into the dropdown and bump the bell badge live, same
+    // "server confirms, then every open tab renders it" principle as
+    // the rest of this app's live updates.
+    socket.on("new_notification", (payload) => {
+        notifications.unshift(payload);
+        notifList.insertAdjacentElement("afterbegin", buildNotifRow(payload));
+        renderNotifEmptyState();
+        bumpNotifUnreadBadge();
     });
 
     socket.on("group_updated", (payload) => {
