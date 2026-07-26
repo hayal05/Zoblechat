@@ -1112,6 +1112,11 @@ def cloudinary_mirror_upload(local_filepath, relative_path):
     a hiccup here should never block the user's upload from succeeding.
     """
     if not CLOUDINARY_CONFIGURED:
+        logger.warning(
+            "Skipping Cloudinary mirror upload for %s — CLOUDINARY_CLOUD_NAME/"
+            "CLOUDINARY_API_KEY/CLOUDINARY_API_SECRET not all set.",
+            relative_path,
+        )
         return
     public_id = cloudinary_public_id_for(relative_path)
     timestamp = int(time.time())
@@ -1130,8 +1135,10 @@ def cloudinary_mirror_upload(local_filepath, relative_path):
                 timeout=15,
             )
         resp.raise_for_status()
-    except requests.RequestException:
-        logger.exception("Cloudinary mirror upload failed for %s", relative_path)
+        logger.info("Cloudinary mirror upload succeeded for %s -> public_id=%s", relative_path, public_id)
+    except requests.RequestException as e:
+        body = getattr(getattr(e, "response", None), "text", "<no response>")
+        logger.exception("Cloudinary mirror upload failed for %s. Response body: %s", relative_path, body)
 
 
 def cloudinary_mirror_delete(relative_path):
@@ -1142,6 +1149,11 @@ def cloudinary_mirror_delete(relative_path):
     storage quota, which isn't worth failing the user's request over.
     """
     if not CLOUDINARY_CONFIGURED:
+        logger.warning(
+            "Skipping Cloudinary mirror delete for %s — CLOUDINARY_CLOUD_NAME/"
+            "CLOUDINARY_API_KEY/CLOUDINARY_API_SECRET not all set.",
+            relative_path,
+        )
         return
     public_id = cloudinary_public_id_for(relative_path)
     timestamp = int(time.time())
