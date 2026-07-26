@@ -1565,26 +1565,54 @@
         </svg>`;
     }
 
+    function repostIconSvg(filled) {
+        return `<svg width="16" height="16" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}" fill-opacity="0.15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 1l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
+            <path d="M7 23l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+        </svg>`;
+    }
+
     function buildFeedCard(post) {
         const card = document.createElement("div");
         card.className = "feed-card";
         card.dataset.postId = post.id;
 
+        // A repost is its own Post row (post.repost_of_id set) carrying an
+        // optional quote in `post.text`; the content shown and acted on
+        // (like/comment/share/repost) is always the original underneath it.
+        const isRepost = !!post.repost_of_id && !!post.repost_of;
+        const target = isRepost ? post.repost_of : post;
+        card.dataset.targetId = target.id;
+
         const isOwn = post.user_id === CURRENT_USER_ID;
-        const hasImage = !!post.image_url;
-        const hasText = !!(post.text && post.text.trim());
+        const hasImage = !!target.image_url;
+        const hasText = !!(target.text && target.text.trim());
+        const hasQuote = isRepost && !!(post.text && post.text.trim());
+
+        const repostBannerHtml = isRepost ? `
+            <div class="feed-repost-banner">
+                ${repostIconSvg(false)}
+                <span class="feed-card-account-trigger" data-user-id="${post.user_id}">${escapeHtml(post.full_name || post.username)} reposted</span>
+            </div>` : "";
+        const quoteHtml = hasQuote ? `<p class="feed-card-text feed-repost-quote">${escapeHtml(post.text)}</p>` : "";
 
         // Text (if any) always renders above the picture (if any), same
         // reading order as a normal Facebook-style feed post.
-        const textHtml = hasText ? `<p class="feed-card-text">${escapeHtml(post.text)}</p>` : "";
-        const mediaHtml = hasImage ? `<div class="feed-card-media"><img src="${post.image_url}" alt="Post photo" loading="lazy"></div>` : "";
+        const textHtml = hasText ? `<p class="feed-card-text">${escapeHtml(target.text)}</p>` : "";
+        const mediaHtml = hasImage ? `<div class="feed-card-media"><img src="${target.image_url}" alt="Post photo" loading="lazy"></div>` : "";
+
+        const originalOpen = isRepost ? `<div class="feed-repost-original">` : "";
+        const originalClose = isRepost ? `</div>` : "";
 
         card.innerHTML = `
+            ${repostBannerHtml}
+            ${quoteHtml}
+            ${originalOpen}
             <div class="feed-card-header">
-                <span class="avatar avatar-sm feed-card-account-trigger" data-user-id="${post.user_id}"><img src="/static/uploads/${post.profile_pic}" alt="${escapeHtml(post.full_name || post.username)}"></span>
+                <span class="avatar avatar-sm feed-card-account-trigger" data-user-id="${target.user_id}"><img src="/static/uploads/${target.profile_pic}" alt="${escapeHtml(target.full_name || target.username)}"></span>
                 <span class="feed-card-identity">
-                    <span class="feed-card-name feed-card-account-trigger" data-user-id="${post.user_id}">${escapeHtml(post.full_name || post.username)}${verifiedBadgeHtml(post)}</span>
-                    <span class="feed-card-time">${feedTimeAgo(post.created_at)}</span>
+                    <span class="feed-card-name feed-card-account-trigger" data-user-id="${target.user_id}">${escapeHtml(target.full_name || target.username)}${verifiedBadgeHtml(target)}</span>
+                    <span class="feed-card-time">${feedTimeAgo(target.created_at)}</span>
                 </span>
                 <button class="btn-icon feed-card-delete" type="button" title="Delete post" ${isOwn ? "" : "hidden"}>
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1597,23 +1625,28 @@
             </div>
             ${textHtml}
             ${mediaHtml}
+            ${originalClose}
             <div class="feed-card-footer">
-                <button class="feed-action-btn feed-like-btn${post.liked_by_me ? " feed-liked" : ""}" type="button">
-                    ${likeIconSvg(!!post.liked_by_me)}
-                    <span class="feed-like-count">${post.like_count}</span>
+                <button class="feed-action-btn feed-like-btn${target.liked_by_me ? " feed-liked" : ""}" type="button">
+                    ${likeIconSvg(!!target.liked_by_me)}
+                    <span class="feed-like-count">${target.like_count}</span>
                 </button>
                 <button class="feed-action-btn feed-comment-btn" type="button">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                     </svg>
-                    <span class="feed-comment-count">${post.comment_count}</span>
+                    <span class="feed-comment-count">${target.comment_count}</span>
+                </button>
+                <button class="feed-action-btn feed-repost-btn${target.reposted_by_me ? " feed-reposted" : ""}" type="button" title="Repost">
+                    ${repostIconSvg(!!target.reposted_by_me)}
+                    <span class="feed-repost-count">${target.repost_count || 0}</span>
                 </button>
                 <button class="feed-action-btn feed-share-btn" type="button">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle>
                         <line x1="8.6" y1="13.5" x2="15.4" y2="17.5"></line><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"></line>
                     </svg>
-                    <span class="feed-share-count">${post.share_count}</span>
+                    <span class="feed-share-count">${target.share_count}</span>
                 </button>
             </div>`;
         return card;
@@ -1763,6 +1796,9 @@
         const card = e.target.closest(".feed-card");
         if (!card) return;
         const postId = parseInt(card.dataset.postId, 10);
+        // Like/comment/share/repost always act on the underlying original
+        // post, even when this card is showing it via someone's repost.
+        const targetId = parseInt(card.dataset.targetId, 10);
 
         const accountTrigger = e.target.closest(".feed-card-account-trigger");
         if (accountTrigger) {
@@ -1774,22 +1810,35 @@
             const btn = card.querySelector(".feed-like-btn");
             btn.disabled = true;
             try {
-                const res = await fetch(`/api/posts/${postId}/like`, { method: "POST" });
+                const res = await fetch(`/api/posts/${targetId}/like`, { method: "POST" });
                 if (res.ok) {
                     const data = await res.json();
-                    applyLikeState(postId, data.liked, data.like_count);
+                    applyLikeState(targetId, data.liked, data.like_count);
                 }
             } catch (err) { /* ignore */ } finally { btn.disabled = false; }
             return;
         }
 
         if (e.target.closest(".feed-comment-btn")) {
-            openCommentsDrawer(postId);
+            openCommentsDrawer(targetId);
+            return;
+        }
+
+        if (e.target.closest(".feed-repost-btn")) {
+            const btn = card.querySelector(".feed-repost-btn");
+            btn.disabled = true;
+            try {
+                const res = await fetch(`/api/posts/${targetId}/repost`, { method: "POST" });
+                if (res.ok) {
+                    const data = await res.json();
+                    applyRepostState(targetId, data.reposted, data.repost_count);
+                }
+            } catch (err) { /* ignore */ } finally { btn.disabled = false; }
             return;
         }
 
         if (e.target.closest(".feed-share-btn")) {
-            await handleShare(postId, card);
+            await handleShare(targetId, card);
             return;
         }
 
@@ -1802,20 +1851,61 @@
         }
     });
 
-    function applyLikeState(postId, liked, likeCount) {
-        const post = feedPosts.find((p) => p.id === postId);
-        if (post) { post.liked_by_me = liked; post.like_count = likeCount; }
-        const card = feedTrack.querySelector(`.feed-card[data-post-id="${postId}"]`);
-        if (!card) return;
-        const btn = card.querySelector(".feed-like-btn");
-        btn.classList.toggle("feed-liked", !!liked);
-        btn.innerHTML = `${likeIconSvg(!!liked)}<span class="feed-like-count">${likeCount}</span>`;
+    // A given underlying post can be visible in more than one card at once
+    // (the original, plus anyone's repost of it), so these update every
+    // card currently showing that post rather than just one.
+    function forEachCardShowing(targetId, fn) {
+        feedTrack.querySelectorAll(`.feed-card[data-target-id="${targetId}"]`).forEach(fn);
     }
 
-    async function handleShare(postId, card) {
-        const post = feedPosts.find((p) => p.id === postId);
-        const shareUrl = `${window.location.origin}${window.location.pathname}#post-${postId}`;
-        const shareText = post && post.text ? post.text.slice(0, 120) : "Check out this post on Zoble";
+    function applyLikeState(targetId, liked, likeCount) {
+        feedPosts.forEach((p) => {
+            const t = p.repost_of_id && p.repost_of ? p.repost_of : p;
+            if (t.id === targetId) { t.liked_by_me = liked; t.like_count = likeCount; }
+        });
+        forEachCardShowing(targetId, (card) => {
+            const btn = card.querySelector(".feed-like-btn");
+            if (!btn) return;
+            btn.classList.toggle("feed-liked", !!liked);
+            btn.innerHTML = `${likeIconSvg(!!liked)}<span class="feed-like-count">${likeCount}</span>`;
+        });
+    }
+
+    // Updates the repost count only — safe to apply from a broadcast, since
+    // the count is the same for everyone watching the feed.
+    function updateRepostCount(targetId, repostCount) {
+        feedPosts.forEach((p) => {
+            const t = p.repost_of_id && p.repost_of ? p.repost_of : p;
+            if (t.id === targetId) t.repost_count = repostCount;
+        });
+        forEachCardShowing(targetId, (card) => {
+            const el = card.querySelector(".feed-repost-count");
+            if (el) el.textContent = repostCount;
+        });
+    }
+
+    // Updates the repost count *and* the highlighted "you reposted this"
+    // button state — only call this for the current user's own action
+    // (the direct fetch response), never from a broadcast meant for
+    // everyone, since whether *you* reposted something is personal.
+    function applyRepostState(targetId, reposted, repostCount) {
+        feedPosts.forEach((p) => {
+            const t = p.repost_of_id && p.repost_of ? p.repost_of : p;
+            if (t.id === targetId) { t.reposted_by_me = reposted; t.repost_count = repostCount; }
+        });
+        forEachCardShowing(targetId, (card) => {
+            const btn = card.querySelector(".feed-repost-btn");
+            if (!btn) return;
+            btn.classList.toggle("feed-reposted", !!reposted);
+            btn.innerHTML = `${repostIconSvg(!!reposted)}<span class="feed-repost-count">${repostCount}</span>`;
+        });
+    }
+
+    async function handleShare(targetId, card) {
+        const shareUrl = `${window.location.origin}${window.location.pathname}#post-${targetId}`;
+        const targetPost = feedPosts.find((p) => p.id === targetId) ||
+            (feedPosts.find((p) => p.repost_of && p.repost_of.id === targetId) || {}).repost_of;
+        const shareText = targetPost && targetPost.text ? targetPost.text.slice(0, 120) : "Check out this post on Zoble";
 
         if (navigator.share) {
             try {
@@ -1830,12 +1920,17 @@
         }
 
         try {
-            const res = await fetch(`/api/posts/${postId}/share`, { method: "POST" });
+            const res = await fetch(`/api/posts/${targetId}/share`, { method: "POST" });
             if (res.ok) {
                 const data = await res.json();
-                if (post) post.share_count = data.share_count;
-                const countEl = card.querySelector(".feed-share-count");
-                if (countEl) countEl.textContent = data.share_count;
+                feedPosts.forEach((p) => {
+                    const t = p.repost_of_id && p.repost_of ? p.repost_of : p;
+                    if (t.id === targetId) t.share_count = data.share_count;
+                });
+                forEachCardShowing(targetId, (c) => {
+                    const countEl = c.querySelector(".feed-share-count");
+                    if (countEl) countEl.textContent = data.share_count;
+                });
             }
         } catch (err) { /* ignore */ }
     }
@@ -1903,10 +1998,12 @@
     }
 
     function bumpCommentCount(postId, count) {
-        const post = feedPosts.find((p) => p.id === postId);
-        if (post) post.comment_count = count;
-        const card = feedTrack.querySelector(`.feed-card[data-post-id="${postId}"] .feed-comment-count`);
-        if (card) card.textContent = count;
+        feedPosts.forEach((p) => {
+            const t = p.repost_of_id && p.repost_of ? p.repost_of : p;
+            if (t.id === postId) t.comment_count = count;
+        });
+        feedTrack.querySelectorAll(`.feed-card[data-target-id="${postId}"] .feed-comment-count`)
+            .forEach((el) => { el.textContent = count; });
     }
 
     feedCommentForm.addEventListener("submit", async (e) => {
@@ -2347,6 +2444,7 @@
         post_like: "❤️",
         post_comment: "💬",
         post_share: "🔁",
+        post_repost: "🔂",
         story_reaction: "❤️",
         message_reaction: "😊",
         group_message_reaction: "😊",
@@ -4198,10 +4296,21 @@
     });
 
     socket.on("post_shared", (payload) => {
-        const post = feedPosts.find((p) => p.id === payload.post_id);
-        if (post) post.share_count = payload.share_count;
-        const countEl = feedTrack.querySelector(`.feed-card[data-post-id="${payload.post_id}"] .feed-share-count`);
-        if (countEl) countEl.textContent = payload.share_count;
+        feedPosts.forEach((p) => {
+            const t = p.repost_of_id && p.repost_of ? p.repost_of : p;
+            if (t.id === payload.post_id) t.share_count = payload.share_count;
+        });
+        feedTrack.querySelectorAll(`.feed-card[data-target-id="${payload.post_id}"] .feed-share-count`)
+            .forEach((el) => { el.textContent = payload.share_count; });
+    });
+
+    socket.on("post_reposted", (payload) => {
+        // The repost itself (a new feed card) arrives separately via
+        // "new_post" (or is removed via "post_deleted") — this just keeps
+        // the repost count in sync for everyone watching the feed live.
+        // (Not the highlighted button state — that's personal to whoever
+        // actually reposted it, and is set locally from the fetch response.)
+        updateRepostCount(payload.original_post_id, payload.repost_count);
     });
 
     // ---------------------------------------------------------------
