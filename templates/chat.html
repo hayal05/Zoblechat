@@ -473,6 +473,13 @@
                         <span class="chat-header-status" id="activeStatus">—</span>
                     </span>
                 </button>
+                <div class="chat-header-actions" id="chatHeaderActions">
+                    <button class="btn-icon btn-voice-call" id="voiceCallBtn" title="Start voice call" type="button">
+                        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                        </svg>
+                    </button>
+                </div>
             </header>
 
             <div class="messages-scroll" id="messagesScroll">
@@ -497,6 +504,61 @@
             <p class="photo-upload-status" id="photoUploadStatus" hidden></p>
         </div>
     </main>
+
+    <!-- ============ VOICE CALL ============ -->
+    <div class="call-overlay-backdrop" id="callOverlayBackdrop" hidden>
+        <div class="call-card">
+            <span class="call-card-avatar">
+                <img id="callCardAvatar" src="" alt="">
+            </span>
+            <p class="call-card-name" id="callCardName"></p>
+            <p class="call-card-status" id="callCardStatus">Calling…</p>
+            <div class="call-card-actions">
+                <button class="call-action-btn call-action-decline" id="callDeclineBtn" title="Decline" type="button" hidden>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                        <line x1="23" y1="1" x2="1" y2="23"></line>
+                    </svg>
+                </button>
+                <button class="call-action-btn call-action-accept" id="callAcceptBtn" title="Accept" type="button" hidden>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                    </svg>
+                </button>
+                <button class="call-action-btn call-action-end" id="callCancelBtn" title="Cancel" type="button" hidden>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                        <line x1="23" y1="1" x2="1" y2="23"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Compact bar shown once a call is actually connected, so the person
+         can keep browsing the chat while staying on the call. -->
+    <div class="call-bar" id="callBar" hidden>
+        <span class="call-bar-avatar"><img id="callBarAvatar" src="" alt=""></span>
+        <span class="call-bar-info">
+            <span class="call-bar-name" id="callBarName"></span>
+            <span class="call-bar-timer" id="callBarTimer">00:00</span>
+        </span>
+        <button class="call-bar-btn" id="callMuteBtn" title="Mute" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                <line x1="12" y1="19" x2="12" y2="23"></line>
+                <line x1="8" y1="23" x2="16" y2="23"></line>
+            </svg>
+        </button>
+        <button class="call-bar-btn call-bar-end" id="callBarEndBtn" title="End call" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                <line x1="23" y1="1" x2="1" y2="23"></line>
+            </svg>
+        </button>
+    </div>
+    <audio id="remoteCallAudio" autoplay hidden></audio>
 
     <!-- ============ PHOTO LIGHTBOX ============ -->
     <div class="modal-backdrop lightbox-backdrop" id="lightboxBackdrop" hidden>
@@ -2880,6 +2942,7 @@
         statusEl.textContent = `${group.member_count} member${group.member_count === 1 ? "" : "s"}`;
         statusEl.dataset.state = "";
         document.title = `${group.name} · Zoble Chat`;
+        if (voiceCallBtn) voiceCallBtn.hidden = true;
     }
 
     // msg fields match GroupMessage.to_dict() from the server: sender_id,
@@ -3570,6 +3633,7 @@
         // Tab title reflects that this is a private 1:1 conversation, not a
         // public/group room.
         document.title = `Private Chat with ${name} · Zoble Chat`;
+        if (voiceCallBtn) voiceCallBtn.hidden = false;
     }
 
     async function openConversationForId(userId) {
@@ -4052,6 +4116,323 @@
         // already update instantly via sendReaction()'s response.
         updateMessageReactions(payload.message_id, payload.reactions);
     });
+
+    // ---------------------------------------------------------------
+    // Voice calls (1:1) — WebRTC audio, signaled over the same socket.
+    //
+    // Call states: "idle" -> "outgoing" (we invited, waiting for accept)
+    // -> "connecting" (accepted, exchanging SDP/ICE) -> "active" (audio
+    // flowing) -> "idle". Or on the receiving end: "idle" -> "incoming"
+    // -> "connecting" -> "active" -> "idle".
+    // ---------------------------------------------------------------
+    const voiceCallBtn = document.getElementById("voiceCallBtn");
+    const callOverlayBackdrop = document.getElementById("callOverlayBackdrop");
+    const callCardAvatar = document.getElementById("callCardAvatar");
+    const callCardName = document.getElementById("callCardName");
+    const callCardStatus = document.getElementById("callCardStatus");
+    const callAcceptBtn = document.getElementById("callAcceptBtn");
+    const callDeclineBtn = document.getElementById("callDeclineBtn");
+    const callCancelBtn = document.getElementById("callCancelBtn");
+    const callBar = document.getElementById("callBar");
+    const callBarAvatar = document.getElementById("callBarAvatar");
+    const callBarName = document.getElementById("callBarName");
+    const callBarTimer = document.getElementById("callBarTimer");
+    const callMuteBtn = document.getElementById("callMuteBtn");
+    const callBarEndBtn = document.getElementById("callBarEndBtn");
+    const remoteCallAudio = document.getElementById("remoteCallAudio");
+
+    const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+
+    let callState = "idle"; // idle | outgoing | incoming | connecting | active
+    let callId = null;
+    let callPeerId = null;      // the other user's id, for the call currently in progress
+    let callPeerName = null;
+    let callPeerAvatar = null;
+    let peerConnection = null;
+    let localStream = null;
+    let callTimerInterval = null;
+    let callStartedAt = null;
+    let isMuted = false;
+    // Buffers ICE candidates that arrive before the remote description is
+    // set yet (can happen if candidates race the offer/answer).
+    let pendingRemoteCandidates = [];
+
+    function resetCallUI() {
+        callOverlayBackdrop.hidden = true;
+        callBar.hidden = true;
+        callAcceptBtn.hidden = true;
+        callDeclineBtn.hidden = true;
+        callCancelBtn.hidden = true;
+        callCardStatus.classList.remove("is-pulsing");
+        if (callTimerInterval) {
+            clearInterval(callTimerInterval);
+            callTimerInterval = null;
+        }
+        callBarTimer.textContent = "00:00";
+        if (isMuted) {
+            isMuted = false;
+            callMuteBtn.classList.remove("is-muted");
+        }
+    }
+
+    function teardownCall() {
+        if (peerConnection) {
+            peerConnection.onicecandidate = null;
+            peerConnection.ontrack = null;
+            peerConnection.onconnectionstatechange = null;
+            peerConnection.close();
+            peerConnection = null;
+        }
+        if (localStream) {
+            localStream.getTracks().forEach((t) => t.stop());
+            localStream = null;
+        }
+        remoteCallAudio.srcObject = null;
+        pendingRemoteCandidates = [];
+        callState = "idle";
+        callId = null;
+        callPeerId = null;
+        callPeerName = null;
+        callPeerAvatar = null;
+        callStartedAt = null;
+        resetCallUI();
+    }
+
+    function showCallCard({ name, avatar, status, showAccept, showDecline, showCancel, pulsing }) {
+        callOverlayBackdrop.hidden = false;
+        callBar.hidden = true;
+        callCardName.textContent = name;
+        callCardAvatar.src = avatar ? `/static/uploads/${avatar}` : "/static/uploads/default.png";
+        callCardStatus.textContent = status;
+        callCardStatus.classList.toggle("is-pulsing", !!pulsing);
+        callAcceptBtn.hidden = !showAccept;
+        callDeclineBtn.hidden = !showDecline;
+        callCancelBtn.hidden = !showCancel;
+    }
+
+    function showCallBar() {
+        callOverlayBackdrop.hidden = true;
+        callBar.hidden = false;
+        callBarName.textContent = callPeerName || "";
+        callBarAvatar.src = callPeerAvatar ? `/static/uploads/${callPeerAvatar}` : "/static/uploads/default.png";
+        callStartedAt = Date.now();
+        callTimerInterval = setInterval(() => {
+            const secs = Math.floor((Date.now() - callStartedAt) / 1000);
+            const mm = String(Math.floor(secs / 60)).padStart(2, "0");
+            const ss = String(secs % 60).padStart(2, "0");
+            callBarTimer.textContent = `${mm}:${ss}`;
+        }, 1000);
+    }
+
+    function generateCallId() {
+        if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+        return `call-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    async function ensurePeerConnection() {
+        if (peerConnection) return peerConnection;
+        peerConnection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+        peerConnection.onicecandidate = (event) => {
+            if (event.candidate && callPeerId != null && callId) {
+                socket.emit("call_signal", {
+                    to_user_id: callPeerId,
+                    call_id: callId,
+                    signal: { type: "ice-candidate", candidate: event.candidate },
+                });
+            }
+        };
+
+        peerConnection.ontrack = (event) => {
+            remoteCallAudio.srcObject = event.streams[0];
+        };
+
+        peerConnection.onconnectionstatechange = () => {
+            if (!peerConnection) return;
+            if (peerConnection.connectionState === "connected" && callState !== "active") {
+                callState = "active";
+                showCallBar();
+            } else if (["failed", "disconnected", "closed"].includes(peerConnection.connectionState) && callState !== "idle") {
+                endCall("connection_lost");
+            }
+        };
+
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        } catch (err) {
+            console.error("Microphone permission denied or unavailable:", err);
+            alert("Couldn't access your microphone. Please allow microphone access to make voice calls.");
+            teardownCall();
+            throw err;
+        }
+        localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
+        return peerConnection;
+    }
+
+    // --- Starting an outgoing call (button in the chat header) ---
+    voiceCallBtn.addEventListener("click", () => {
+        if (callState !== "idle" || activeConversationType !== "user" || activeUserId == null) return;
+        const target = knownUsers[activeUserId] || {};
+        callId = generateCallId();
+        callPeerId = activeUserId;
+        callPeerName = target.full_name || target.username || activeUsername || "them";
+        callPeerAvatar = target.profile_pic || null;
+        callState = "outgoing";
+        showCallCard({
+            name: callPeerName,
+            avatar: callPeerAvatar,
+            status: "Calling…",
+            showCancel: true,
+            pulsing: true,
+        });
+        socket.emit("call_invite", { to_user_id: callPeerId, call_id: callId });
+    });
+
+    callCancelBtn.addEventListener("click", () => {
+        if (callState === "outgoing" && callPeerId != null && callId) {
+            socket.emit("call_end", { to_user_id: callPeerId, call_id: callId, reason: "cancelled" });
+        }
+        teardownCall();
+    });
+
+    // --- Receiving an incoming call ---
+    socket.on("call_incoming", (payload) => {
+        if (callState !== "idle") {
+            // Already on a call (or already ringing) — auto-decline as busy.
+            socket.emit("call_reject", { to_user_id: payload.from_user_id, call_id: payload.call_id, reason: "busy" });
+            return;
+        }
+        callId = payload.call_id;
+        callPeerId = payload.from_user_id;
+        callPeerName = payload.from_username || "Someone";
+        callPeerAvatar = payload.from_profile_pic || null;
+        callState = "incoming";
+        showCallCard({
+            name: callPeerName,
+            avatar: callPeerAvatar,
+            status: "Incoming voice call…",
+            showAccept: true,
+            showDecline: true,
+            pulsing: true,
+        });
+    });
+
+    callDeclineBtn.addEventListener("click", () => {
+        if (callState === "incoming" && callPeerId != null && callId) {
+            socket.emit("call_reject", { to_user_id: callPeerId, call_id: callId, reason: "declined" });
+        }
+        teardownCall();
+    });
+
+    callAcceptBtn.addEventListener("click", async () => {
+        if (callState !== "incoming" || callPeerId == null || !callId) return;
+        callState = "connecting";
+        showCallCard({
+            name: callPeerName,
+            avatar: callPeerAvatar,
+            status: "Connecting…",
+            pulsing: true,
+        });
+        try {
+            await ensurePeerConnection();
+        } catch (err) {
+            return; // ensurePeerConnection() already tore things down and alerted
+        }
+        socket.emit("call_accept", { to_user_id: callPeerId, call_id: callId });
+    });
+
+    // --- Caller side: callee accepted, so send them our offer ---
+    socket.on("call_accepted", async (payload) => {
+        if (callState !== "outgoing" || payload.call_id !== callId) return;
+        callState = "connecting";
+        showCallCard({
+            name: callPeerName,
+            avatar: callPeerAvatar,
+            status: "Connecting…",
+            pulsing: true,
+        });
+        try {
+            const pc = await ensurePeerConnection();
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket.emit("call_signal", {
+                to_user_id: callPeerId,
+                call_id: callId,
+                signal: { type: "offer", sdp: pc.localDescription.sdp },
+            });
+        } catch (err) {
+            console.error("Failed to create/send call offer:", err);
+        }
+    });
+
+    socket.on("call_rejected", (payload) => {
+        if (payload.call_id !== callId) return;
+        callCardStatus.classList.remove("is-pulsing");
+        callCardStatus.textContent = payload.reason === "busy" ? "Line is busy" : "Call declined";
+        callAcceptBtn.hidden = true;
+        callDeclineBtn.hidden = true;
+        callCancelBtn.hidden = true;
+        setTimeout(teardownCall, 1600);
+    });
+
+    // --- SDP / ICE relay (both sides) ---
+    socket.on("call_signal", async (payload) => {
+        if (payload.call_id !== callId || payload.from_user_id !== callPeerId) return;
+        const signal = payload.signal || {};
+        try {
+            const pc = await ensurePeerConnection();
+            if (signal.type === "offer") {
+                await pc.setRemoteDescription({ type: "offer", sdp: signal.sdp });
+                for (const cand of pendingRemoteCandidates) await pc.addIceCandidate(cand);
+                pendingRemoteCandidates = [];
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                socket.emit("call_signal", {
+                    to_user_id: callPeerId,
+                    call_id: callId,
+                    signal: { type: "answer", sdp: pc.localDescription.sdp },
+                });
+            } else if (signal.type === "answer") {
+                await pc.setRemoteDescription({ type: "answer", sdp: signal.sdp });
+                for (const cand of pendingRemoteCandidates) await pc.addIceCandidate(cand);
+                pendingRemoteCandidates = [];
+            } else if (signal.type === "ice-candidate" && signal.candidate) {
+                if (pc.remoteDescription && pc.remoteDescription.type) {
+                    await pc.addIceCandidate(signal.candidate);
+                } else {
+                    pendingRemoteCandidates.push(signal.candidate);
+                }
+            }
+        } catch (err) {
+            console.error("Error handling call signal:", err);
+        }
+    });
+
+    function endCall(reason) {
+        if (callState !== "idle" && callPeerId != null && callId) {
+            socket.emit("call_end", { to_user_id: callPeerId, call_id: callId, reason: reason || "hangup" });
+        }
+        teardownCall();
+    }
+
+    socket.on("call_ended", (payload) => {
+        if (payload.call_id !== callId) return;
+        teardownCall();
+    });
+
+    callBarEndBtn.addEventListener("click", () => endCall("hangup"));
+
+    callMuteBtn.addEventListener("click", () => {
+        if (!localStream) return;
+        isMuted = !isMuted;
+        localStream.getAudioTracks().forEach((t) => { t.enabled = !isMuted; });
+        callMuteBtn.classList.toggle("is-muted", isMuted);
+    });
+
+    // Leaving the conversation view entirely (not just switching between
+    // conversations) shouldn't silently drop an active call — but simply
+    // switching which chat is open is fine, since the call bar floats
+    // above the whole page independent of which thread is showing.
 
     // ---------------------------------------------------------------
     // Groups — live updates. A new group appearing (group_created) and a
