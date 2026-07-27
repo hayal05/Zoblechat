@@ -23,6 +23,17 @@
                 window.location.reload();
             }
         });
+
+        // Registers the offline app-shell service worker (static/sw.js).
+        // This is what lets Median show the last-loaded page instead of
+        // its native "no internet" error when the connection drops.
+        if ("serviceWorker" in navigator) {
+            window.addEventListener("load", () => {
+                navigator.serviceWorker.register("/sw.js").catch((err) => {
+                    console.error("Service worker registration failed:", err);
+                });
+            });
+        }
     </script>
 </head>
 <body>
