@@ -1958,6 +1958,19 @@ def handle_500(e):
 # -------------------------------------------------------------------
 # Page Routes (HTML)
 # -------------------------------------------------------------------
+@app.route("/sw.js")
+def service_worker():
+    # Served from the root path (not /static/) so its default scope covers
+    # the whole site — a service worker registered from /static/sw.js could
+    # only control requests under /static/.
+    response = make_response(send_from_directory(
+        os.path.join(app.root_path, "static"), "sw.js"
+    ))
+    response.headers["Content-Type"] = "application/javascript"
+    response.headers["Service-Worker-Allowed"] = "/"
+    return response
+
+
 @app.route("/")
 @login_required
 def index():
