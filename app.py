@@ -110,6 +110,18 @@ FULL_NAME_MAX_LENGTH = 60
 # just keeps one request from being (ab)used to probe the whole phone
 # number keyspace in bulk.
 CONTACTS_MATCH_MAX = 1000
+
+
+def format_call_duration(seconds):
+    """Renders a call length as m:ss (e.g. 0 -> '0:00', 125 -> '2:05').
+    Used both for the call-log Message preview text and for call_*
+    notification text, so the wording matches everywhere it shows up."""
+    try:
+        seconds = max(0, int(seconds or 0))
+    except (TypeError, ValueError):
+        seconds = 0
+    minutes, secs = divmod(seconds, 60)
+    return f"{minutes}:{secs:02d}"
 # Stories: photo-only posts that disappear after a fixed lifetime, with a
 # single reaction (no comments, no video).
 STORY_EXPIRY_HOURS = 72
@@ -942,7 +954,12 @@ class Notification(db.Model):
     actor_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     # 'follow' | 'post_like' | 'post_comment' | 'post_share' | 'post_repost' |
     # 'story_reaction' | 'message_reaction' | 'group_message_reaction' |
-    # 'group_added'
+    # 'group_added' | 'call_missed' | 'call_received' | 'call_outgoing'
+    #
+    # The three call_* types all point at the same call-log Message row via
+    # message_id (see _finalize_call): 'call_missed'/'call_received' go to
+    # the callee (depending on whether they picked up), 'call_outgoing'
+    # always goes to the caller, regardless of how the call ended.
     type = db.Column(db.String(30), nullable=False)
     post_id = db.Column(db.Integer, db.ForeignKey("posts.id", ondelete="SET NULL"), nullable=True)
     story_id = db.Column(db.Integer, db.ForeignKey("stories.id", ondelete="SET NULL"), nullable=True)
@@ -969,11 +986,41 @@ class Notification(db.Model):
         "group_added": "added you to {group}",
     }
 
+    def _call_text(self):
+        """call_* notifications don't fit the static _TEXT_BY_TYPE lookup —
+        the wording depends on how the call actually ended, which lives on
+        the linked call-log Message (message_id), not on the notification
+        row itself."""
+        status, duration = None, None
+        msg = Message.query.get(self.message_id) if self.message_id else None
+        if msg:
+            try:
+                meta = json.loads(msg.content)
+                status = meta.get("call_status")
+                duration = meta.get("duration")
+            except (TypeError, ValueError):
+                pass
+
+        if self.type == "call_missed":
+            return "tried to call you"
+        if self.type == "call_received":
+            return f"had a voice call with you · {format_call_duration(duration)}"
+        if self.type == "call_outgoing":
+            if status == "completed":
+                return f"answered your call · {format_call_duration(duration)}"
+            if status == "declined":
+                return "declined your call"
+            return "didn't answer your call"
+        return ""
+
     def to_dict(self):
-        text = self._TEXT_BY_TYPE.get(self.type, "")
-        if "{group}" in text:
-            group = Group.query.get(self.group_id) if self.group_id else None
-            text = text.format(group=group.name if group else "a group")
+        if self.type.startswith("call_"):
+            text = self._call_text()
+        else:
+            text = self._TEXT_BY_TYPE.get(self.type, "")
+            if "{group}" in text:
+                group = Group.query.get(self.group_id) if self.group_id else None
+                text = text.format(group=group.name if group else "a group")
 
         return {
             "id": self.id,
@@ -1743,6 +1790,89 @@ def mark_user_disconnected(user_id):
 
 
 # -------------------------------------------------------------------
+# Voice call tracking (in-memory, same reasoning as _online_counts above —
+# single gunicorn worker, so there's only ever one process for this to
+# live in) + the call-log Message / call_* Notification rows it produces.
+# -------------------------------------------------------------------
+# call_id -> {"caller_id", "callee_id", "invited_at", "answered_at"}
+_active_calls = {}
+
+
+def format_call_log_text(message, viewer_id):
+    """Human-readable preview of a message_type == 'call' Message, from
+    `viewer_id`'s point of view (caller sees 'No answer', the callee sees
+    'Missed voice call' for that exact same row)."""
+    try:
+        meta = json.loads(message.content)
+    except (TypeError, ValueError):
+        meta = {}
+    status = meta.get("call_status")
+    is_caller = viewer_id == message.sender_id
+
+    if status == "completed":
+        return f"📞 Voice call · {format_call_duration(meta.get('duration'))}"
+    if is_caller:
+        return "📞 Call declined" if status == "declined" else "📞 No answer"
+    return "📞 Missed voice call"
+
+
+def _finalize_call(call_id, status):
+    """Pops the in-progress call record for `call_id` (if any) and turns it
+    into a permanent call-log Message row — visible inside the 1:1
+    conversation exactly like any other message — plus one call_missed/
+    call_received notification for the callee and one call_outgoing
+    notification for the caller, so the outcome also surfaces in the
+    notification bell for whichever side wasn't actively looking at this
+    conversation. `status` is 'completed', 'declined', or 'no_answer'.
+    No-ops if the call was already finalized (e.g. call_reject already
+    logged it before call_end arrived) or never existed."""
+    record = _active_calls.pop(call_id, None)
+    if not record:
+        return
+
+    caller_id = record["caller_id"]
+    callee_id = record["callee_id"]
+    duration = None
+    if status == "completed" and record.get("answered_at"):
+        duration = int((datetime.utcnow() - record["answered_at"]).total_seconds())
+
+    try:
+        message = Message(
+            sender_id=caller_id,
+            recipient_id=callee_id,
+            content=json.dumps({"call_status": status, "duration": duration}),
+            message_type="call",
+            is_read=True,
+        )
+        db.session.add(message)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to save call-log message (call_id=%s)", call_id)
+        return
+
+    payload = message.to_dict()
+    caller = User.query.get(caller_id)
+    payload["sender_username"] = caller.username if caller else None
+    payload["sender_profile_pic"] = caller.profile_pic if caller else None
+    socketio.emit("receive_message", payload, room=get_room_name(callee_id))
+    socketio.emit("receive_message", payload, room=get_room_name(caller_id))
+
+    create_notification(
+        user_id=callee_id,
+        actor_id=caller_id,
+        ntype="call_received" if status == "completed" else "call_missed",
+        message_id=message.id,
+    )
+    create_notification(
+        user_id=caller_id,
+        actor_id=callee_id,
+        ntype="call_outgoing",
+        message_id=message.id,
+    )
+
+
+# -------------------------------------------------------------------
 # Auto-verification badge
 # -------------------------------------------------------------------
 # A user earns the verification badge by being online at least once on each
@@ -1877,8 +2007,10 @@ def index():
             return None
         return {
             # "Photo" already comes through in content for image messages
-            # (see Message.content), so the snippet is sensible either way.
-            "text": m.content,
+            # (see Message.content); call messages get a similar human
+            # summary computed from their JSON content instead of the raw
+            # {"call_status": ..., "duration": ...} string.
+            "text": format_call_log_text(m, current_user.id) if m.message_type == "call" else m.content,
             "message_type": m.message_type,
             "from_me": m.sender_id == current_user.id,
             "is_read": m.is_read,
@@ -4556,6 +4688,13 @@ def handle_call_invite(data):
         emit("error", {"error": "That user does not exist."})
         return
 
+    _active_calls[call_id] = {
+        "caller_id": current_user.id,
+        "callee_id": to_user_id,
+        "invited_at": datetime.utcnow(),
+        "answered_at": None,
+    }
+
     socketio.emit("call_incoming", {
         "call_id": call_id,
         "from_user_id": current_user.id,
@@ -4578,6 +4717,10 @@ def handle_call_accept(data):
     if not call_id:
         return
 
+    record = _active_calls.get(call_id)
+    if record is not None:
+        record["answered_at"] = datetime.utcnow()
+
     socketio.emit("call_accepted", {
         "call_id": call_id,
         "from_user_id": current_user.id,
@@ -4598,10 +4741,16 @@ def handle_call_reject(data):
     if not call_id:
         return
 
+    reason = data.get("reason") or "declined"
+    # "busy" means the callee's client auto-declined because they were
+    # already on another call — that's a missed call, not a deliberate
+    # decline, so it gets logged the same way an unanswered call would.
+    _finalize_call(call_id, "declined" if reason == "declined" else "no_answer")
+
     socketio.emit("call_rejected", {
         "call_id": call_id,
         "from_user_id": current_user.id,
-        "reason": (data.get("reason") or "declined"),
+        "reason": reason,
     }, room=get_room_name(to_user_id))
 
 
@@ -4642,6 +4791,10 @@ def handle_call_end(data):
     if not call_id:
         return
 
+    record = _active_calls.get(call_id)
+    if record is not None:
+        _finalize_call(call_id, "completed" if record.get("answered_at") else "no_answer")
+
     socketio.emit("call_ended", {
         "call_id": call_id,
         "from_user_id": current_user.id,
@@ -4672,6 +4825,24 @@ def handle_disconnect():
             "online": False,
             "last_seen": to_iso_utc(now),
         })
+
+        # Going fully offline mid-call (closed tab, lost connection, etc.)
+        # would otherwise leave the other party's call screen open forever
+        # and the call never logged — finalize it here the same way a
+        # normal hangup would.
+        dangling_call_ids = [
+            cid for cid, rec in _active_calls.items()
+            if rec["caller_id"] == current_user.id or rec["callee_id"] == current_user.id
+        ]
+        for cid in dangling_call_ids:
+            record = _active_calls.get(cid)
+            other_id = record["callee_id"] if record["caller_id"] == current_user.id else record["caller_id"]
+            _finalize_call(cid, "completed" if record.get("answered_at") else "no_answer")
+            socketio.emit("call_ended", {
+                "call_id": cid,
+                "from_user_id": current_user.id,
+                "reason": "disconnected",
+            }, room=get_room_name(other_id))
 
 
 # -------------------------------------------------------------------
