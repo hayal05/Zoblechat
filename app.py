@@ -1558,6 +1558,9 @@ def db_status():
         status["query_error"] = str(e)
 
     return jsonify(status), 200
+
+
+@app.route("/static/uploads/<path:filename>")
 def uploaded_file(filename):
     """Serves an uploaded file from local disk, falling back to its
     Cloudinary mirror when the local copy is missing.
