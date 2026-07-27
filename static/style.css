@@ -941,6 +941,133 @@ a:focus-visible {
 }
 .chat-header-status[data-state="online"] { color: var(--online); font-weight: 600; }
 
+/* Header actions (top-right corner of the chat header) */
+.chat-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.btn-voice-call { color: var(--brand); }
+.btn-voice-call:hover { background: var(--brand-tint); color: var(--brand-dark); }
+.btn-voice-call[disabled] { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
+
+/* ============ VOICE CALL ============ */
+.call-overlay-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(10, 14, 20, 0.72);
+    backdrop-filter: blur(6px);
+}
+.call-overlay-backdrop[hidden] { display: none; }
+
+.call-card {
+    width: 100%;
+    max-width: 340px;
+    background: var(--surface);
+    border-radius: var(--radius-lg, 20px);
+    padding: 36px 28px 28px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+.call-card-avatar {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    overflow: hidden;
+    margin-bottom: 18px;
+    box-shadow: 0 0 0 4px var(--brand-tint);
+}
+.call-card-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.call-card-name {
+    font-size: 19px;
+    font-weight: 700;
+    color: var(--ink);
+    margin: 0 0 6px;
+}
+.call-card-status {
+    font-size: 13.5px;
+    color: var(--ink-faint);
+    margin: 0 0 30px;
+}
+.call-card-status.is-pulsing { animation: callPulse 1.4s ease-in-out infinite; }
+@keyframes callPulse {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 1; }
+}
+.call-card-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 28px;
+}
+.call-action-btn {
+    width: 58px;
+    height: 58px;
+    border-radius: 50%;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: #fff;
+    transition: transform 0.15s ease, filter 0.15s ease;
+}
+.call-action-btn:hover { filter: brightness(1.08); }
+.call-action-btn:active { transform: scale(0.93); }
+.call-action-accept { background: var(--online, #22c55e); }
+.call-action-decline, .call-action-end { background: #ef4444; }
+
+.call-bar {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 999;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    padding: 8px 14px 8px 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+.call-bar[hidden] { display: none; }
+.call-bar-avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+.call-bar-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.call-bar-info { display: flex; flex-direction: column; line-height: 1.2; }
+.call-bar-name { font-size: 13px; font-weight: 700; color: var(--ink); }
+.call-bar-timer { font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.call-bar-btn {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: #fff;
+    background: var(--brand);
+}
+.call-bar-btn.is-muted { background: var(--ink-faint); }
+.call-bar-btn:hover { filter: brightness(1.08); }
+.call-bar-end { background: #ef4444; }
+
 .messages-scroll {
     flex: 1;
     overflow-y: auto;
