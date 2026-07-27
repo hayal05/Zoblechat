@@ -559,6 +559,9 @@
         </button>
     </div>
     <audio id="remoteCallAudio" autoplay hidden></audio>
+    <audio id="incomingRingtone" src="{{ url_for('static', filename='sounds/ringtone_incoming.wav') }}" loop preload="auto" hidden></audio>
+    <audio id="outgoingRingtone" src="{{ url_for('static', filename='sounds/ringtone_outgoing.wav') }}" loop preload="auto" hidden></audio>
+    <audio id="callNotifySound" src="{{ url_for('static', filename='sounds/call_notify.wav') }}" preload="auto" hidden></audio>
 
     <!-- ============ PHOTO LIGHTBOX ============ -->
     <div class="modal-backdrop lightbox-backdrop" id="lightboxBackdrop" hidden>
@@ -861,7 +864,38 @@
         messagesScroll.scrollTo({ top: messagesScroll.scrollHeight, behavior: smooth ? "smooth" : "auto" });
     }
 
+    // Mirrors format_call_duration()/format_call_log_text() server-side —
+    // used for call-log Message rows (message_type "call"), whose content
+    // is JSON ({"call_status": ..., "duration": ...}) rather than plain text.
+    function formatCallDuration(seconds) {
+        seconds = Math.max(0, parseInt(seconds, 10) || 0);
+        const m = Math.floor(seconds / 60);
+        const s = seconds % 60;
+        return `${m}:${String(s).padStart(2, "0")}`;
+    }
+
+    function parseCallMeta(msg) {
+        try {
+            return JSON.parse(msg.content) || {};
+        } catch (err) {
+            return {};
+        }
+    }
+
+    function callLogPreviewText(msg) {
+        const meta = parseCallMeta(msg);
+        const isCaller = msg.sender_id === CURRENT_USER_ID;
+        if (meta.call_status === "completed") {
+            return `📞 Voice call · ${formatCallDuration(meta.duration)}`;
+        }
+        if (isCaller) {
+            return meta.call_status === "declined" ? "📞 Call declined" : "📞 No answer";
+        }
+        return "📞 Missed voice call";
+    }
+
     function messagePreviewText(msg) {
+        if (msg.message_type === "call") return callLogPreviewText(msg);
         return msg.message_type === "image" ? "📷 Photo" : msg.content;
     }
 
@@ -915,7 +949,53 @@
         }
     }
 
+    // Call-log rows (message_type "call") are a centered system-message
+    // style pill rather than a left/right chat bubble — same idea as the
+    // classic phone-app call log, just inline in the thread. Rendered
+    // once here and reused by both initial history load and the live
+    // "receive_message" socket event, same as every other message type.
+    function appendCallLogMessage(msg, animate) {
+        const row = document.createElement("div");
+        row.className = "msg-row call-log-row" + (animate ? " msg-enter" : "");
+        row.dataset.messageId = msg.id;
+        row.dataset.conversationType = "user";
+
+        const meta = parseCallMeta(msg);
+        const isCaller = msg.sender_id === CURRENT_USER_ID;
+        const completed = meta.call_status === "completed";
+        const missed = !completed && !isCaller;
+
+        let label;
+        if (completed) {
+            label = `Voice call · ${formatCallDuration(meta.duration)}`;
+        } else if (isCaller) {
+            label = meta.call_status === "declined" ? "Call declined" : "No answer";
+        } else {
+            label = "Missed voice call";
+        }
+
+        // A simple directional phone glyph: pointing out for calls we
+        // placed, pointing in for calls we received, red when missed.
+        const arrow = isCaller
+            ? `<path d="M7 17L17 7M17 7H9M17 7V15"/>`
+            : `<path d="M17 7L7 17M7 17H15M7 17V9"/>`;
+        const icon = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">${arrow}</svg>`;
+
+        row.innerHTML = `
+            <div class="call-log-pill${missed ? " call-log-missed" : ""}">
+                <span class="call-log-icon">${icon}</span>
+                <span class="call-log-text">${escapeHtml(label)}</span>
+                <span class="call-log-time">${formatTime(msg.timestamp)}</span>
+            </div>`;
+
+        messagesScroll.appendChild(row);
+    }
+
     function appendMessage(msg, animate) {
+        if (msg.message_type === "call") {
+            appendCallLogMessage(msg, animate);
+            return;
+        }
         const outgoing = msg.sender_id === CURRENT_USER_ID;
         const row = document.createElement("div");
         row.className = "msg-row " + (outgoing ? "outgoing" : "incoming") + (animate ? " msg-enter" : "");
@@ -2516,6 +2596,9 @@
         message_reaction: "😊",
         group_message_reaction: "😊",
         group_added: "👥",
+        call_missed: "📵",
+        call_received: "📞",
+        call_outgoing: "📞",
     };
 
     function buildNotifRow(n) {
@@ -4140,6 +4223,41 @@
     const callMuteBtn = document.getElementById("callMuteBtn");
     const callBarEndBtn = document.getElementById("callBarEndBtn");
     const remoteCallAudio = document.getElementById("remoteCallAudio");
+    const incomingRingtone = document.getElementById("incomingRingtone");
+    const outgoingRingtone = document.getElementById("outgoingRingtone");
+    const callNotifySound = document.getElementById("callNotifySound");
+
+    // Ringtones — only one of these ever plays at a time (you're either
+    // ringing someone or being rung, never both), so starting one always
+    // stops the other first. play() can reject if the browser's autoplay
+    // policy hasn't been unlocked by a user gesture yet (most likely for
+    // the *incoming* ringtone, since that fires from a server push rather
+    // than a click) — that's fine, it just means silent-but-visible
+    // ringing on that one tab, same graceful degradation the rest of the
+    // app already accepts elsewhere.
+    function stopRingtones() {
+        [incomingRingtone, outgoingRingtone].forEach((el) => {
+            el.pause();
+            el.currentTime = 0;
+        });
+    }
+
+    function playIncomingRingtone() {
+        stopRingtones();
+        incomingRingtone.currentTime = 0;
+        incomingRingtone.play().catch((err) => console.warn("Incoming ringtone blocked:", err));
+    }
+
+    function playOutgoingRingtone() {
+        stopRingtones();
+        outgoingRingtone.currentTime = 0;
+        outgoingRingtone.play().catch((err) => console.warn("Outgoing ringtone blocked:", err));
+    }
+
+    function playCallNotifySound() {
+        callNotifySound.currentTime = 0;
+        callNotifySound.play().catch(() => {});
+    }
 
     const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
 
@@ -4176,6 +4294,7 @@
     }
 
     function teardownCall() {
+        stopRingtones();
         if (peerConnection) {
             peerConnection.onicecandidate = null;
             peerConnection.ontrack = null;
@@ -4286,6 +4405,7 @@
             pulsing: true,
         });
         socket.emit("call_invite", { to_user_id: callPeerId, call_id: callId });
+        playOutgoingRingtone();
     });
 
     callCancelBtn.addEventListener("click", () => {
@@ -4315,6 +4435,7 @@
             showDecline: true,
             pulsing: true,
         });
+        playIncomingRingtone();
     });
 
     callDeclineBtn.addEventListener("click", () => {
@@ -4326,6 +4447,7 @@
 
     callAcceptBtn.addEventListener("click", async () => {
         if (callState !== "incoming" || callPeerId == null || !callId) return;
+        stopRingtones();
         callState = "connecting";
         showCallCard({
             name: callPeerName,
@@ -4344,6 +4466,7 @@
     // --- Caller side: callee accepted, so send them our offer ---
     socket.on("call_accepted", async (payload) => {
         if (callState !== "outgoing" || payload.call_id !== callId) return;
+        stopRingtones();
         callState = "connecting";
         showCallCard({
             name: callPeerName,
@@ -4367,6 +4490,7 @@
 
     socket.on("call_rejected", (payload) => {
         if (payload.call_id !== callId) return;
+        stopRingtones();
         callCardStatus.classList.remove("is-pulsing");
         callCardStatus.textContent = payload.reason === "busy" ? "Line is busy" : "Call declined";
         callAcceptBtn.hidden = true;
@@ -4538,6 +4662,9 @@
         notifList.insertAdjacentElement("afterbegin", buildNotifRow(payload));
         renderNotifEmptyState();
         bumpNotifUnreadBadge();
+        if (payload.type && payload.type.startsWith("call_")) {
+            playCallNotifySound();
+        }
     });
 
     socket.on("group_updated", (payload) => {
