@@ -1186,6 +1186,42 @@ a:focus-visible {
 .msg-row.incoming .msg-time { color: var(--ink-faint); }
 .msg-row.outgoing .msg-time { color: rgba(255, 255, 255, 0.8); }
 
+/* Call-log rows (message_type "call") — a centered system-message pill
+   rather than a left/right chat bubble, same idea as a phone app's call
+   history entries appearing inline in a conversation. */
+.msg-row.call-log-row {
+    justify-content: center;
+    margin: 4px 0 14px;
+}
+.call-log-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--ink-faint);
+    font-size: 12.5px;
+    box-shadow: var(--shadow-plate);
+}
+.call-log-icon {
+    display: inline-flex;
+    line-height: 0;
+    color: var(--brand);
+}
+.call-log-text { color: var(--ink); }
+.call-log-time {
+    color: var(--ink-faint);
+    font-size: 11px;
+    margin-left: 2px;
+}
+.call-log-pill.call-log-missed .call-log-icon,
+.call-log-pill.call-log-missed .call-log-text {
+    color: #e5484d;
+}
+.call-log-pill.call-log-missed .call-log-text { font-weight: 600; }
+
 /* Read receipts — a single check once a sent message has left the server,
    becoming a double check (and a lighter tint) once the recipient has
    actually opened the conversation and it's been marked read. Mirrors the
