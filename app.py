@@ -4499,6 +4499,153 @@ def handle_mark_group_read(data):
     }, room=get_group_room_name(group_id))
 
 
+
+# -------------------------------------------------------------------
+# Voice calls (1:1) — plain WebRTC signaling relay over Socket.IO.
+#
+# The server never touches audio itself; it just relays small JSON
+# messages between the two participants' private rooms (get_room_name)
+# so a "call_invite" reaches every open tab/device for the callee, an
+# SDP offer/answer + ICE candidates ("call_signal") get passed straight
+# through, and either side can end the call ("call_end") or decline it
+# ("call_reject") at any point.
+# -------------------------------------------------------------------
+
+def _coerce_user_id(raw):
+    """Returns (user_id, error_message). error_message is None on success."""
+    try:
+        user_id = int(raw)
+    except (TypeError, ValueError):
+        return None, "to_user_id must be a valid user id."
+    return user_id, None
+
+
+@socketio.on("call_invite")
+def handle_call_invite(data):
+    """
+    Expected payload: {"to_user_id": <int>, "call_id": <str>}
+    Caller -> callee: "Someone wants to call you."
+    """
+    if not current_user.is_authenticated:
+        emit("error", {"error": "Not authenticated."})
+        return
+
+    if not isinstance(data, dict):
+        emit("error", {"error": "Invalid payload."})
+        return
+
+    to_user_id, err = _coerce_user_id(data.get("to_user_id"))
+    if err:
+        emit("error", {"error": err})
+        return
+
+    call_id = str(data.get("call_id") or "")
+    if not call_id:
+        emit("error", {"error": "call_id is required."})
+        return
+
+    if to_user_id == current_user.id:
+        emit("error", {"error": "You cannot call yourself."})
+        return
+
+    callee = User.query.get(to_user_id)
+    if not callee:
+        emit("error", {"error": "That user does not exist."})
+        return
+
+    socketio.emit("call_incoming", {
+        "call_id": call_id,
+        "from_user_id": current_user.id,
+        "from_username": current_user.username,
+        "from_profile_pic": current_user.profile_pic,
+    }, room=get_room_name(to_user_id))
+
+
+@socketio.on("call_accept")
+def handle_call_accept(data):
+    """Expected payload: {"to_user_id": <int>, "call_id": <str>}
+    Callee -> caller: "I picked up, send me your offer." """
+    if not current_user.is_authenticated or not isinstance(data, dict):
+        return
+
+    to_user_id, err = _coerce_user_id(data.get("to_user_id"))
+    if err:
+        return
+    call_id = str(data.get("call_id") or "")
+    if not call_id:
+        return
+
+    socketio.emit("call_accepted", {
+        "call_id": call_id,
+        "from_user_id": current_user.id,
+    }, room=get_room_name(to_user_id))
+
+
+@socketio.on("call_reject")
+def handle_call_reject(data):
+    """Expected payload: {"to_user_id": <int>, "call_id": <str>, "reason": <str optional>}
+    Callee -> caller: "Declined" (or auto-declined because already busy)."""
+    if not current_user.is_authenticated or not isinstance(data, dict):
+        return
+
+    to_user_id, err = _coerce_user_id(data.get("to_user_id"))
+    if err:
+        return
+    call_id = str(data.get("call_id") or "")
+    if not call_id:
+        return
+
+    socketio.emit("call_rejected", {
+        "call_id": call_id,
+        "from_user_id": current_user.id,
+        "reason": (data.get("reason") or "declined"),
+    }, room=get_room_name(to_user_id))
+
+
+@socketio.on("call_signal")
+def handle_call_signal(data):
+    """Expected payload: {"to_user_id": <int>, "call_id": <str>, "signal": <dict>}
+    Passthrough relay for SDP offers/answers and ICE candidates — the
+    server doesn't inspect `signal`, it just forwards it untouched."""
+    if not current_user.is_authenticated or not isinstance(data, dict):
+        return
+
+    to_user_id, err = _coerce_user_id(data.get("to_user_id"))
+    if err:
+        return
+    call_id = str(data.get("call_id") or "")
+    signal = data.get("signal")
+    if not call_id or not isinstance(signal, dict):
+        return
+
+    socketio.emit("call_signal", {
+        "call_id": call_id,
+        "from_user_id": current_user.id,
+        "signal": signal,
+    }, room=get_room_name(to_user_id))
+
+
+@socketio.on("call_end")
+def handle_call_end(data):
+    """Expected payload: {"to_user_id": <int>, "call_id": <str>, "reason": <str optional>}
+    Either side hanging up, or the caller canceling before it's answered."""
+    if not current_user.is_authenticated or not isinstance(data, dict):
+        return
+
+    to_user_id, err = _coerce_user_id(data.get("to_user_id"))
+    if err:
+        return
+    call_id = str(data.get("call_id") or "")
+    if not call_id:
+        return
+
+    socketio.emit("call_ended", {
+        "call_id": call_id,
+        "from_user_id": current_user.id,
+        "reason": (data.get("reason") or "hangup"),
+    }, room=get_room_name(to_user_id))
+
+
 @socketio.on("disconnect")
 def handle_disconnect():
     if not current_user.is_authenticated:
